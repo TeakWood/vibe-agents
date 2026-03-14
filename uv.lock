@@ -686,7 +686,7 @@ wheels = [
 [[package]]
 name = "vibe-agents"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "anyio" },
     { name = "claude-agent-sdk" },

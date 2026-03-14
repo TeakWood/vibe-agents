@@ -6,3 +6,12 @@ dependencies = [
     "anyio",
     "claude-agent-sdk",
 ]
+
+[project.scripts]
+install-plugins = "scripts.install_plugins:main"
+
+[tool.setuptools.packages.find]
+include = ["scripts*"]
+
+[tool.uv]
+package = true
