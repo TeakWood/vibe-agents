@@ -9,9 +9,10 @@ dependencies = [
 
 [project.scripts]
 install-plugins = "scripts.install_plugins:main"
+vibe-agents = "vibe_agents.orchestrator:main"
 
 [tool.setuptools.packages.find]
-include = ["scripts*"]
+include = ["scripts*", "vibe_agents*"]
 
 [tool.uv]
 package = true

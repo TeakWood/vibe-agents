@@ -45,6 +45,8 @@ pattern, Pydantic config, async conventions, etc.
 
 ### Step 3 — Implement
 
+- If the task involves building a UI, web component, page, or any frontend interface,
+  invoke `/frontend-design` before writing any code to apply design guidelines.
 - Write the minimum code that satisfies every acceptance criterion
 - Do not add features, abstractions, or configurability not required by the task
 - Do not leave debug prints, commented-out code, or TODO comments
