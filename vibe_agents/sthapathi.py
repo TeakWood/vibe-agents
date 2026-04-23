@@ -1,4 +1,4 @@
-"""Main orchestration loop and CLI entry point.
+"""Sthapathi (स्थपति) — master orchestrator and CLI entry point.
 
 Run from a plain terminal OUTSIDE any Claude Code session:
     python run.py --repo /path/to/repo [--project-name MyProject]
@@ -66,7 +66,7 @@ async def main() -> None:
 
     # ── CLI args ──────────────────────────────────────────────────────────────
     parser = argparse.ArgumentParser(
-        description="Orchestrator — Silpi implements, Viharapala reviews."
+        description="Sthapathi — Silpi implements, Viharapala reviews."
     )
     parser.add_argument("--repo", required=True, type=Path, help="Path to the git repository")
     parser.add_argument(
@@ -88,7 +88,7 @@ async def main() -> None:
         agents_dir=_PROJECT_ROOT,
     )
 
-    log(f"Orchestrator started for '{ctx.project_name}' at {ctx.repo_root}")
+    log(f"Sthapathi started for '{ctx.project_name}' at {ctx.repo_root}")
     log("Agents: Silpi (implement) + Viharapala (review)")
 
     ensure_initialized(ctx)

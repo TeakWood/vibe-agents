@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def log(msg: str) -> None:
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Orchestrator] {msg}", flush=True)
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Sthapathi] {msg}", flush=True)
 
 
 def make_logger(agent: str):

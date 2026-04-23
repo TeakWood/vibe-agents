@@ -9,7 +9,7 @@ dependencies = [
 
 [project.scripts]
 install-plugins = "scripts.install_plugins:main"
-vibe-agents = "vibe_agents.orchestrator:main"
+vibe-agents = "vibe_agents.sthapathi:main"
 
 [tool.setuptools.packages.find]
 include = ["scripts*", "vibe_agents*"]
