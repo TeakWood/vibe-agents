@@ -5,7 +5,14 @@ from pathlib import Path
 
 
 def log(msg: str) -> None:
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Orchestrator] {msg}", flush=True)
+
+
+def make_logger(agent: str):
+    """Return a log function that prefixes messages with the given agent name."""
+    def _log(msg: str) -> None:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [{agent}] {msg}", flush=True)
+    return _log
 
 
 def slugify(text: str) -> str:

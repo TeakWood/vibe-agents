@@ -24,7 +24,10 @@ from ..git import (
     pull,
     push,
 )
-from ..shell import log
+from ..shell import log, make_logger
+
+_silpi = make_logger("Silpi")
+_viharapala = make_logger("Viharapala")
 from ..state import clear_task
 
 
@@ -54,14 +57,14 @@ async def run_task_loop(
 
         # ── Silpi: implement or address feedback ──────────────────────────────
         if state == "silpi_implement":
-            log(f"[Round {round_num}] Silpi → implement {task_id}")
+            _silpi(f"[Round {round_num}] implement {task_id}")
             await silpi.implement(task_id, task_context, branch, ctx)
             _ensure_review_submitted(task_id, ctx)
             state = "viharapala_review"
 
         elif state == "silpi_address":
             review_comments = get_comments(task_id, ctx) or "See bd comments."
-            log(f"[Round {round_num}] Silpi → address feedback on {task_id}")
+            _silpi(f"[Round {round_num}] address feedback on {task_id}")
             await silpi.address_feedback(
                 task_id, task_context, branch, round_num, review_comments, ctx
             )
@@ -70,23 +73,23 @@ async def run_task_loop(
 
         # ── Viharapala: review ────────────────────────────────────────────────
         if state == "viharapala_review":
-            log(f"[Round {round_num}] Viharapala → review {task_id}")
+            _viharapala(f"[Round {round_num}] review {task_id}")
             await viharapala.review(task_id, branch, ctx)
 
             verdict = review_state(task_id, ctx)
             if verdict == "approved":
-                log(f"{task_id} approved after {round_num} round(s).")
+                _viharapala(f"{task_id} approved after {round_num} round(s).")
                 state = "merge"
             elif verdict == "changes-required":
-                log(f"{task_id} needs changes — handing back to Silpi (round {round_num + 1}).")
+                _viharapala(f"{task_id} needs changes — handing back to Silpi (round {round_num + 1}).")
                 round_num += 1
                 state = "silpi_address"
                 continue
             elif verdict == "viharapala-approved":
-                log(f"{task_id} approved by Viharapala — awaiting author sign-off.")
+                _viharapala(f"{task_id} approved — awaiting author sign-off.")
                 return
             else:
-                log(f"Viharapala did not set a verdict ('{verdict or 'none'}') — re-running review.")
+                _viharapala(f"No verdict set ('{verdict or 'none'}') — re-running review.")
                 continue
 
         # ── Merge ─────────────────────────────────────────────────────────────
