@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 # Project root so cron can invoke the runner module
-_PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
+_PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.resolve()
 
 
 def _marker(repo_root: Path) -> str:
@@ -23,7 +23,7 @@ def install(command: str, repo_root: Path, log_file: Path) -> None:
     # Shell-escape the e2e command so it survives being passed as a -c argument
     safe_command = command.strip().replace("\n", " ").replace("\r", "")
     runner_invocation = (
-        f"{sys.executable} -m vibe_agents.parikshaka.runner "
+        f"{sys.executable} -m vibe_agents.agents.parikshaka.runner "
         f"--repo {shlex.quote(str(repo_root))} "
         f"--command {shlex.quote(safe_command)}"
     )

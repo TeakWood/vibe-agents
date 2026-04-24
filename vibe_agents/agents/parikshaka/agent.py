@@ -7,7 +7,7 @@ Lifecycle:
   4. On SIGTERM: removes the crontab entry and exits cleanly.
 
 Run as:
-    python -m vibe_agents.parikshaka.agent --repo /path/to/repo
+    python -m vibe_agents.agents.parikshaka.agent --repo /path/to/repo
 """
 
 import argparse
@@ -18,7 +18,7 @@ from pathlib import Path
 
 from .cron import install, remove
 from .discovery import find_e2e_command
-from ..shell import make_logger
+from ...shell import make_logger
 
 log = make_logger("Parikshaka")
 

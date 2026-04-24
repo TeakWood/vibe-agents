@@ -7,7 +7,7 @@ Steps:
   4. For each failure, create a bd bug task unless one is already open.
 
 Run as:
-    python -m vibe_agents.parikshaka.runner --repo /path/to/repo --command "npm run e2e"
+    python -m vibe_agents.agents.parikshaka.runner --repo /path/to/repo --command "npm run e2e"
 """
 
 import argparse
@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 from .parser import TestFailure, parse_failures
-from ..shell import make_logger
+from ...shell import make_logger
 
 log = make_logger("Parikshaka")
 

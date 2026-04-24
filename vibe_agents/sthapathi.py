@@ -31,7 +31,7 @@ def _start_pariksaka(ctx: Context) -> subprocess.Popen | None:
     """Spawn the Pariksaka QA agent as a child process."""
     try:
         proc = subprocess.Popen(
-            [sys.executable, "-m", "vibe_agents.parikshaka.agent", "--repo", str(ctx.repo_root)],
+            [sys.executable, "-m", "vibe_agents.agents.parikshaka.agent", "--repo", str(ctx.repo_root)],
             cwd=str(_PROJECT_ROOT),
         )
         log(f"Pariksaka QA agent started (pid={proc.pid})")
