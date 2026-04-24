@@ -24,3 +24,8 @@ class Context:
     def epic_breakdown_file(self) -> Path:
         """Crash-recovery file for an in-progress epic breakdown."""
         return self.repo_root / ".claude" / "epic-breakdown.json"
+
+    @property
+    def parikshaka_queue_file(self) -> Path:
+        """Persistent queue of merged tasks awaiting Parikshaka quality checks."""
+        return self.repo_root / ".claude" / "parikshaka-queue.json"

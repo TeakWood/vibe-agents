@@ -1,35 +1,36 @@
-"""The core implement → review → (address → review)* → merge → quality-check loop.
+"""The core implement → review → (address → review)* → merge loop for a single task.
 
 Workflow
 --------
-  silpi_implement  ──►  viharapala_review  ──►  merge  ──►  parikshaka_check
+  silpi_implement  ──►  viharapala_review  ──►  merge  ──►  returns task dict
                               │
                      changes-required
                               │
                               ▼
                        silpi_address  ──►  viharapala_review  (repeats)
+
+Returns the merged task dict on success, or None when pausing for author sign-off.
+The caller (sthapathi) enqueues the result for Parikshaka.
 """
 
 import json
 
-from ..agents import parikshaka, silpi, viharapala
+from ..agents import silpi, viharapala
 from ..bd import close_task, get_comments, review_state, set_state, show_task
 from ..context import Context
 from ..git import (
     branch_exists,
     checkout,
-    create_branch,
     delete_branch,
     merge_squash_and_commit,
     pull,
     push,
 )
 from ..shell import log, make_logger
+from ..state import clear_task
 
 _silpi = make_logger("Silpi")
 _viharapala = make_logger("Viharapala")
-_parikshaka = make_logger("Parikshaka")
-from ..state import clear_task
 
 
 async def run_task_loop(
@@ -38,16 +39,11 @@ async def run_task_loop(
     start_round: int,
     start_state: str,
     ctx: Context,
-) -> None:
+) -> dict | None:
     """Drive a single task through the full implement → review → merge lifecycle.
 
-    Args:
-        task:        The bd task dict.
-        branch:      The feature branch name (e.g. "feature/add-login").
-        start_round: Round number to begin at (1 for new tasks, >1 when resuming).
-        start_state: Where to resume: "silpi_implement" | "silpi_address" |
-                     "viharapala_review" | "merge"
-        ctx:         Runtime context.
+    Returns the task dict when merged successfully, or None when pausing for
+    author sign-off (viharapala-approved on an epic).
     """
     task_id = task["id"]
     round_num = start_round
@@ -88,7 +84,7 @@ async def run_task_loop(
                 continue
             elif verdict == "viharapala-approved":
                 _viharapala(f"{task_id} approved — awaiting author sign-off.")
-                return
+                return None
             else:
                 _viharapala(f"No verdict set ('{verdict or 'none'}') — re-running review.")
                 continue
@@ -109,10 +105,7 @@ async def run_task_loop(
             close_task(task_id, "Approved and merged to main", ctx)
             clear_task(ctx)
             log(f"Task {task_id} complete.")
-
-            _parikshaka(f"Quality check after {task_id}...")
-            await parikshaka.quality_check(task_id, task.get("title", ""), ctx)
-            return
+            return task
 
 
 def _ensure_review_submitted(task_id: str, ctx: Context) -> None:
