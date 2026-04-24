@@ -1,8 +1,8 @@
-"""The core implement → review → (address → review)* → merge loop for a single task.
+"""The core implement → review → (address → review)* → merge → quality-check loop.
 
 Workflow
 --------
-  silpi_implement  ──►  viharapala_review  ──►  merge
+  silpi_implement  ──►  viharapala_review  ──►  merge  ──►  parikshaka_check
                               │
                      changes-required
                               │
@@ -12,7 +12,7 @@ Workflow
 
 import json
 
-from ..agents import silpi, viharapala
+from ..agents import parikshaka, silpi, viharapala
 from ..bd import close_task, get_comments, review_state, set_state, show_task
 from ..context import Context
 from ..git import (
@@ -28,6 +28,7 @@ from ..shell import log, make_logger
 
 _silpi = make_logger("Silpi")
 _viharapala = make_logger("Viharapala")
+_parikshaka = make_logger("Parikshaka")
 from ..state import clear_task
 
 
@@ -108,6 +109,9 @@ async def run_task_loop(
             close_task(task_id, "Approved and merged to main", ctx)
             clear_task(ctx)
             log(f"Task {task_id} complete.")
+
+            _parikshaka(f"Quality check after {task_id}...")
+            await parikshaka.quality_check(task_id, task.get("title", ""), ctx)
             return
 
 
