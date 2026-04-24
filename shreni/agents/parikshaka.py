@@ -5,18 +5,25 @@ from .runner import load_agent_prompt, run_agent
 
 
 async def quality_check(task_id: str, task_title: str, ctx: Context) -> None:
-    """Run e2e quality check after a task has been merged to main."""
+    """Triage quality after a task has been merged to main.
+
+    Parikshaka does not write code. It creates:
+      - bug tasks (label=parikshaka) for e2e regressions
+      - feature tasks (label=e2e) for missing e2e coverage
+    Both are picked up by Sthapathi and implemented by Silpi.
+    """
     await run_agent(
         load_agent_prompt("parikshaka", ctx),
         (
             f"Task {task_id} ('{task_title}') has been completed and merged to main.\n\n"
-            f"Quality check the project:\n"
-            f"1. Discover and run the e2e test suite.\n"
-            f"2. If any tests fail, create bd bug tasks for each new regression"
-            f" (skip failures that already have an open bug).\n"
-            f"3. If all tests pass, review the completed task and write new e2e tests"
-            f" for any user-facing functionality not yet covered.\n"
-            f"4. Commit any new test files: {task_id}: Add e2e tests for <feature>"
+            f"Triage the project quality:\n"
+            f"1. Discover and run the existing e2e suite. For each failing test, create a"
+            f" bug task (--labels parikshaka) unless an open bug already exists for it.\n"
+            f"2. Review the completed task and its diff. If it introduced user-visible"
+            f" behaviour not covered by an existing e2e test, create a coverage task"
+            f" (--type feature --labels e2e) with a detailed description of the user"
+            f" journey and acceptance criteria for Silpi to implement.\n"
+            f"Do not write any code or test files."
         ),
         ctx,
     )

@@ -13,7 +13,14 @@ You will receive a prompt from the orchestrator specifying:
 - The full task context from `bd show`
 - Whether this is a first implementation or an address-review-feedback round
 
-Read the prompt carefully before doing anything else.
+Read the task labels before doing anything else:
+
+```bash
+bd show <id> --json
+```
+
+If the task has the label **`e2e`**, follow the [E2e Test Tasks](#e2e-test-tasks) flow
+instead of the standard Implementation Loop below.
 
 ---
 
@@ -129,6 +136,67 @@ When re-invoked after `changes-required`:
    ```bash
    bd set-state <id> review=ready-for-review --reason "Changes addressed" --json
    ```
+
+---
+
+## E2e Test Tasks
+
+When a task has the label **`e2e`**, Parikshaka created it to fill a coverage gap.
+Your job is to write the e2e tests it describes — not to write production code.
+
+### Step 1 — Read the task
+
+```bash
+bd show <id> --json
+bd comments <id>
+```
+
+The description will specify the user journey to cover, the acceptance criteria, and
+the e2e framework to use. Read it fully before touching any files.
+
+### Step 2 — Find existing e2e tests to follow
+
+Locate the existing test directory and read a few examples to understand the
+framework's conventions (file layout, helper usage, selector strategy):
+
+```bash
+find . -type f -name "*.spec.*" -o -name "*.e2e.*" | head -20
+```
+
+Match the patterns you find exactly — do not introduce a new style.
+
+### Step 3 — Write the tests
+
+- Cover every user journey and assertion listed in the task description
+- Cover the happy path and the key failure paths (e.g. invalid input, missing auth)
+- Use the same selectors, helpers, and fixtures as the existing tests
+- Do not modify production source code
+
+### Step 4 — Run the e2e suite
+
+```bash
+<e2e command from CLAUDE.md>
+```
+
+All new tests must pass. If existing tests fail, investigate — do not mask or skip them.
+
+### Step 5 — Run quality gates and commit
+
+```bash
+# Lint / type-check if applicable (see CLAUDE.md)
+```
+
+Commit only the new test files:
+
+```
+<id>: Add e2e tests for <feature name>
+```
+
+### Step 6 — Submit for review
+
+```bash
+bd set-state <id> review=ready-for-review --reason "e2e tests written and passing" --json
+```
 
 ---
 
