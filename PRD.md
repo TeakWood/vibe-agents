@@ -1,4 +1,4 @@
-# vibe-agents — Product Requirements Document
+# Shreni — Product Requirements Document
 
 ## Problem
 
@@ -6,13 +6,13 @@ Software development backlogs stall not because ideas are lacking, but because e
 
 LLMs can now write, test, and reason about code well enough to handle bounded, well-specified tasks end-to-end. The missing piece is the scaffolding that connects model capability to a real development workflow: branches, commits, reviews, merges, and quality gates.
 
-vibe-agents is that scaffolding.
+Shreni is that scaffolding.
 
 ---
 
 ## Goal
 
-Run a software development team autonomously against a task backlog. Given a repository and a list of tasks in a tracker, vibe-agents should implement each task, validate it passes quality gates, review it for correctness and quality, and merge it to `main` — without human involvement for routine work.
+Run a software development team autonomously against a task backlog. Given a repository and a list of tasks in a tracker, Shreni should implement each task, validate it passes quality gates, review it for correctness and quality, and merge it to `main` — without human involvement for routine work.
 
 The human remains in the loop for decisions that require judgment: approving epic designs, auditing flagged reviews, and setting the task backlog.
 
@@ -33,7 +33,7 @@ The human remains in the loop for decisions that require judgment: approving epi
 > As a developer, I want to add a task to my backlog and have it implemented, tested, reviewed, and merged without me doing it myself.
 
 - The developer creates a task in `bd` with a title, description, and acceptance criteria.
-- vibe-agents picks it up, creates a feature branch, implements it, runs tests, reviews the code, and merges to `main`.
+- Shreni picks it up, creates a feature branch, implements it, runs tests, reviews the code, and merges to `main`.
 - The developer sees the merged commit without having written the code.
 
 ### Review loop
@@ -75,8 +75,8 @@ The human remains in the loop for decisions that require judgment: approving epi
 
 - **Replacing the developer entirely.** Epics require human sign-off on design. The task backlog is still curated by humans.
 - **Handling ambiguous tasks.** Tasks need clear acceptance criteria. The system does not ask clarifying questions during implementation.
-- **Multi-repo orchestration.** One vibe-agents instance manages one repository.
-- **Cloud deployment or persistent hosting.** vibe-agents runs locally as a terminal process.
+- **Multi-repo orchestration.** One Shreni instance manages one repository.
+- **Cloud deployment or persistent hosting.** Shreni runs locally as a terminal process.
 
 ---
 

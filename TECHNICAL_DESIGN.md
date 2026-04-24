@@ -1,8 +1,8 @@
-# vibe-agents — Technical Design
+# Shreni — Technical Design
 
 ## Overview
 
-vibe-agents is an autonomous multi-agent coding system built on the Claude Agent SDK. It takes a backlog of tasks from a `bd` (Beads) issue tracker and implements them end-to-end: writing code, running tests, reviewing changes, and merging to `main` — without human involvement for routine tasks.
+Shreni is an autonomous multi-agent coding system built on the Claude Agent SDK. It takes a backlog of tasks from a `bd` (Beads) issue tracker and implements them end-to-end: writing code, running tests, reviewing changes, and merging to `main` — without human involvement for routine tasks.
 
 ---
 
@@ -46,7 +46,7 @@ vibe-agents is an autonomous multi-agent coding system built on the Claude Agent
 ## Module Layout
 
 ```
-vibe_agents/
+shreni/
 ├── sthapathi.py          # Orchestrator entry point and main loop
 ├── context.py            # Runtime dataclass (repo_root, project_name, etc.)
 ├── bd.py                 # All Beads CLI interactions
@@ -196,7 +196,7 @@ Two JSON files under `<repo>/.claude/`:
 3. Passes `ClaudeAgentOptions(cwd=repo_root)` so the agent operates inside the target repo
 4. Optionally passes `SdkPluginConfig` entries (Silpi loads `frontend-design@claude-code-plugins`)
 
-The `cwd` is always the **target repo**, not the vibe-agents project root. The agent prompt files live in the vibe-agents project and are loaded by path before the SDK call.
+The `cwd` is always the **target repo**, not the Shreni project root. The agent prompt files live in the Shreni project and are loaded by path before the SDK call.
 
 ---
 
@@ -234,7 +234,7 @@ All runtime configuration flows through the `Context` dataclass. There are no gl
 |-------|--------|---------|
 | `repo_root` | `--repo` CLI arg | Target repository path |
 | `project_name` | `--project-name` or `repo_root.name` | Used in agent prompts |
-| `agents_dir` | vibe-agents project root | Locates `silpi/` and `viharapala/` prompt dirs |
+| `agents_dir` | Shreni project root | Locates `silpi/` and `viharapala/` prompt dirs |
 | `idle_interval` | Hardcoded default 120s | Sleep time when no tasks are ready |
 
 ---

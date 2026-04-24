@@ -1,5 +1,5 @@
 [project]
-name = "vibe-agents"
+name = "shreni"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
@@ -9,10 +9,10 @@ dependencies = [
 
 [project.scripts]
 install-plugins = "scripts.install_plugins:main"
-vibe-agents = "vibe_agents.sthapathi:main"
+shreni = "shreni.sthapathi:main"
 
 [tool.setuptools.packages.find]
-include = ["scripts*", "vibe_agents*"]
+include = ["scripts*", "shreni*"]
 
 [tool.uv]
 package = true

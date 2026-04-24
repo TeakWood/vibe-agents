@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install required Claude Code plugins for vibe-agents."""
+"""Install required Claude Code plugins for Shreni."""
 
 import subprocess
 import sys
