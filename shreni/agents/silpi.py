@@ -33,6 +33,7 @@ async def init_project(ctx: Context) -> None:
         load_agent_prompt("silpi", ctx),
         (
             f"You are Silpi, initialising the project context file for {ctx.project_name}.\n\n"
+
             f"## Instructions\n"
             f"Read the repository at {ctx.repo_root} and create or update CLAUDE.md at its root.\n\n"
             f"CLAUDE.md MUST contain the following sections (add any that are missing,"
@@ -80,6 +81,7 @@ async def init_project(ctx: Context) -> None:
             f"When done, commit with the message: chore: initialise CLAUDE.md"
         ),
         ctx,
+        agent_name="silpi",
         plugins=_PLUGINS,
     )
 
@@ -107,6 +109,7 @@ async def implement(task_id: str, task_context: str, branch: str, ctx: Context) 
             f" --reason 'Implementation complete' --json"
         ),
         ctx,
+        agent_name="silpi",
         plugins=_PLUGINS,
     )
 
@@ -140,6 +143,7 @@ async def address_feedback(
             f" --reason 'Changes addressed' --json"
         ),
         ctx,
+        agent_name="silpi",
         plugins=_PLUGINS,
     )
 
@@ -165,5 +169,6 @@ async def breakdown_epic(
             f" --reason 'Feature tasks created' --json"
         ),
         ctx,
+        agent_name="silpi",
         plugins=_PLUGINS,
     )

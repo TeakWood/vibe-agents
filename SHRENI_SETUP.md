@@ -202,6 +202,49 @@ shreni run --repo /path/to/project
 
 ---
 
+## Monitoring agents
+
+Each agent writes its output to a separate log file under `.claude/`:
+
+| File | Agent |
+|---|---|
+| `.claude/silpi.log` | Silpi — implementation and feedback |
+| `.claude/viharapala.log` | Viharapala — code review |
+| `.claude/parikshaka.log` | Parikshaka — QA / e2e triage |
+
+The main terminal (`shreni run`) shows only orchestrator status — task picks, merges, state transitions.
+
+### tmux (automatic)
+
+If `tmux` is installed, `shreni run` automatically opens a detached session named `shreni-<project>` with three side-by-side panes tailing each log:
+
+```
+┌──────────────┬─────────────────┬──────────────┐
+│    Silpi     │   Viharapala    │  Parikshaka  │
+│   silpi.log  │ viharapala.log  │parikshaka.log│
+└──────────────┴─────────────────┴──────────────┘
+```
+
+Attach to it in another terminal:
+
+```bash
+tmux attach -t shreni-<project>
+```
+
+If the session already exists (e.g. after a restart), `shreni run` prints the attach command and leaves the existing session untouched.
+
+### Manual (no tmux)
+
+Open separate terminals and tail each file:
+
+```bash
+tail -f /path/to/project/.claude/silpi.log
+tail -f /path/to/project/.claude/viharapala.log
+tail -f /path/to/project/.claude/parikshaka.log
+```
+
+---
+
 ## Re-running init
 
 `shreni init` is safe to re-run. Each step has a skip condition so only missing pieces are created. The one exception is the cron job — it is always replaced to pick up any format changes.

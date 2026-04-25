@@ -16,6 +16,7 @@ async def quality_check(task_id: str, task_title: str, ctx: Context) -> None:
         load_agent_prompt("parikshaka", ctx),
         (
             f"Task {task_id} ('{task_title}') has been completed and merged to main.\n\n"
+
             f"Triage the project quality:\n"
             f"1. Discover and run the existing e2e suite. For each failing test, create a"
             f" bug task (--labels parikshaka) unless an open bug already exists for it.\n"
@@ -26,4 +27,5 @@ async def quality_check(task_id: str, task_title: str, ctx: Context) -> None:
             f"Do not write any code or test files."
         ),
         ctx,
+        agent_name="parikshaka",
     )

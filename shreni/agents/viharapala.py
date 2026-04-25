@@ -10,4 +10,5 @@ async def review(task_id: str, branch: str, ctx: Context) -> None:
         load_agent_prompt("viharapala", ctx),
         f"Review task {task_id} only. It has been submitted for review on branch '{branch}'.",
         ctx,
+        agent_name="viharapala",
     )

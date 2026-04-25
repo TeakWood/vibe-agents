@@ -17,25 +17,38 @@ async def run_agent(
     prompt: str,
     ctx: Context,
     *,
+    agent_name: str = "agent",
     plugins: list[SdkPluginConfig] | None = None,
 ) -> None:
-    """Run a Claude agent session, streaming text output to stdout."""
-    async for message in query(
-        prompt=prompt,
-        options=ClaudeAgentOptions(
-            system_prompt=system_prompt,
-            permission_mode="bypassPermissions",
-            cwd=str(ctx.repo_root),
-            plugins=plugins or [],
-        ),
-    ):
-        if isinstance(message, AssistantMessage):
-            for block in message.content:
-                if isinstance(block, TextBlock):
-                    print(block.text, end="", flush=True)
-        elif isinstance(message, ResultMessage):
-            if message.result:
-                print(message.result, flush=True)
+    """Run a Claude agent session, streaming output to .claude/<agent_name>.log.
+
+    Keeping agent output in per-file logs lets Silpi and Parikshaka run
+    concurrently without interleaving on stdout. Monitor each with:
+      tail -f .claude/silpi.log
+      tail -f .claude/parikshaka.log
+    """
+    log_file = ctx.repo_root / ".claude" / f"{agent_name}.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+
+    with log_file.open("a") as f:
+        async for message in query(
+            prompt=prompt,
+            options=ClaudeAgentOptions(
+                system_prompt=system_prompt,
+                permission_mode="bypassPermissions",
+                cwd=str(ctx.repo_root),
+                plugins=plugins or [],
+            ),
+        ):
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        f.write(block.text)
+                        f.flush()
+            elif isinstance(message, ResultMessage):
+                if message.result:
+                    f.write(message.result + "\n")
+                    f.flush()
 
 
 def load_agent_prompt(agent_name: str, ctx: Context) -> str:

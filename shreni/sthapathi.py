@@ -28,6 +28,7 @@ from .state import (
     load_parikshaka_queue,
     save_task,
 )
+from .tmux import start_log_session
 from .workflow.epic import run_epic_breakdown
 from .workflow.resume import find_resumable_task
 from .workflow.task_loop import run_task_loop
@@ -228,6 +229,7 @@ async def main() -> None:
     # ── run ───────────────────────────────────────────────────────────────────
     log(f"Sthapathi started for '{ctx.project_name}' at {ctx.repo_root}")
     log("Agents: Silpi (implement) + Viharapala (review) + Parikshaka (QA, background)")
+    start_log_session(ctx)
 
     ensure_initialized(ctx)
 
