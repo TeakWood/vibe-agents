@@ -41,3 +41,10 @@ def log_range(from_ref: str, to_ref: str, ctx: Context) -> str:
     return run_cmd_output(
         ["git", "log", f"{from_ref}..{to_ref}", "--oneline"], ctx.repo_root
     )
+
+
+def branch_has_commits(branch: str, ctx: Context) -> bool:
+    """Return True if branch exists and has at least one commit ahead of main."""
+    if not branch_exists(branch, ctx):
+        return False
+    return bool(log_range("main", branch, ctx))

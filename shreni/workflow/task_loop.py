@@ -20,7 +20,9 @@ from ..bd import close_task, get_comments, review_state, set_state, show_task
 from ..context import Context
 from ..git import (
     branch_exists,
+    branch_has_commits,
     checkout,
+    create_branch,
     delete_branch,
     merge_squash_and_commit,
     pull,
@@ -91,16 +93,26 @@ async def run_task_loop(
 
         # ── Merge ─────────────────────────────────────────────────────────────
         if state == "merge":
-            if branch_exists(branch, ctx):
-                log(f"Merging {branch} → main...")
-                checkout("main", ctx)
-                pull(ctx)
-                merge_squash_and_commit(branch, task_id, ctx)
-                push(ctx)
-                delete_branch(branch, ctx)
-                log("Merged and pushed.")
-            else:
-                log(f"Branch {branch} not found locally — skipping (already merged).")
+            if not branch_has_commits(branch, ctx):
+                # Branch is empty or missing — Silpi never committed anything.
+                # Re-route to implement rather than ghost-merging.
+                log(f"Branch {branch} has no commits ahead of main — Silpi did not commit. Re-implementing.")
+                if branch_exists(branch, ctx):
+                    checkout(branch, ctx)
+                else:
+                    checkout("main", ctx)
+                    pull(ctx)
+                    create_branch(branch, ctx)
+                state = "silpi_implement"
+                continue
+
+            log(f"Merging {branch} → main...")
+            checkout("main", ctx)
+            pull(ctx)
+            merge_squash_and_commit(branch, task_id, ctx)
+            push(ctx)
+            delete_branch(branch, ctx)
+            log("Merged and pushed.")
 
             close_task(task_id, "Approved and merged to main", ctx)
             clear_task(ctx)

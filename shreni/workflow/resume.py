@@ -2,7 +2,7 @@
 
 from ..bd import query_tasks, review_state, tasks_with_label
 from ..context import Context
-from ..git import current_branch as get_current_branch, log_range
+from ..git import branch_has_commits, current_branch as get_current_branch, log_range
 from ..shell import log, slugify
 from ..state import load_task
 
@@ -75,7 +75,11 @@ def find_resumable_task(ctx: Context) -> tuple[dict | None, str | None, str, int
     if approved_tasks:
         t = approved_tasks[0]
         branch = f"feature/{slugify(t['title'])}"
-        log(f"Resume: review=approved → task {t['id']}, branch={branch}, state=merge")
-        return t, branch, "merge", 1
+        if branch_has_commits(branch, ctx):
+            log(f"Resume: review=approved → task {t['id']}, branch={branch}, state=merge")
+            return t, branch, "merge", 1
+        else:
+            log(f"Resume: review=approved → task {t['id']}, branch has no commits — state=silpi_implement")
+            return t, branch, "silpi_implement", 1
 
     return None, None, "none", 1
