@@ -154,17 +154,29 @@ def _configure_beads_backup(ctx: Context) -> None:
     log("Backup config written to .beads/config.yaml")
 
 
-def _add_dolthub_remote(ctx: Context, dolthub_username: str, db_name: str) -> None:
-    """Register the DoltHub remote via bd dolt remote add."""
+def _add_dolthub_remote(ctx: Context, dolthub_username: str, db_name: str, prefix: str) -> None:
+    """Register the DoltHub remote using dolt CLI directly (bd dolt hangs due to port bug)."""
     remote_url = f"https://doltremoteapi.dolthub.com/{dolthub_username}/{db_name}"
+    dolt_path = ctx.repo_root / ".beads" / "embeddeddolt" / prefix
+    if not dolt_path.exists():
+        log(f"Warning: dolt db path not found at {dolt_path} — skipping remote add.")
+        return
     log(f"Adding DoltHub remote: {remote_url}")
+    # Check if remote already exists
+    check = subprocess.run(
+        ["dolt", "remote", "-v"],
+        capture_output=True, text=True, cwd=dolt_path,
+    )
+    if "origin" in check.stdout:
+        log("Remote 'origin' already exists — skipping.")
+        return
     result = subprocess.run(
-        ["bd", "dolt", "remote", "add", "origin", remote_url],
-        capture_output=True, text=True, cwd=ctx.repo_root,
+        ["dolt", "remote", "add", "origin", remote_url],
+        capture_output=True, text=True, cwd=dolt_path,
     )
     if result.returncode != 0:
-        log(f"Warning: bd dolt remote add failed: {result.stderr.strip()}")
-        log("You may need to add the remote manually — see the DoltHub setup instructions.")
+        log(f"Warning: dolt remote add failed: {result.stderr.strip()}")
+        log(f"Add it manually: cd {dolt_path} && dolt remote add origin {remote_url}")
     else:
         log("Remote added.")
 
@@ -226,7 +238,7 @@ async def run_init(ctx: Context) -> None:
     db_name = f"{prefix}-beads"
     _print_dolthub_repo_instructions(ctx, dolthub_username, db_name)
 
-    _add_dolthub_remote(ctx, dolthub_username, db_name)
+    _add_dolthub_remote(ctx, dolthub_username, db_name, prefix)
     _initial_push(ctx, prefix)
 
     # ── Backup cron (dolt push every 5 min) ──────────────────────────────────
