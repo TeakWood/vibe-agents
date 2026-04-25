@@ -1,10 +1,9 @@
 """Optional tmux log session — opens a detached window tailing all agent logs.
 
-Layout (even-horizontal, 3 panes):
-  ┌──────────────┬─────────────────┬──────────────┐
-  │    Silpi     │   Viharapala    │  Parikshaka  │
-  │   silpi.log  │ viharapala.log  │parikshaka.log│
-  └──────────────┴─────────────────┴──────────────┘
+Layout (even-horizontal, 3 panes with titled borders):
+  ┌─ shreni-silpi ──┬─ shreni-viharapala ─┬─ shreni-parikshaka ─┐
+  │  silpi.log      │  viharapala.log      │  parikshaka.log     │
+  └─────────────────┴──────────────────────┴─────────────────────┘
 
 Attach: tmux attach -t shreni-<project>
 """
@@ -22,8 +21,12 @@ _AGENTS = ["silpi", "viharapala", "parikshaka"]
 def start_log_session(ctx: Context) -> None:
     """Open a detached tmux session tailing all agent logs.
 
+    Passes the tail command directly to new-session/split-window rather than
+    using send-keys, so pane-base-index in ~/.tmux.conf has no effect.
+
     Skips silently if tmux is not installed. If a session for this project
     already exists, prints the attach command and returns without recreating it.
+    A tmux failure is non-fatal — shreni continues and logs the manual fallback.
     """
     if shutil.which("tmux") is None:
         return
@@ -36,39 +39,50 @@ def start_log_session(ctx: Context) -> None:
     for name in _AGENTS:
         (log_dir / f"{name}.log").touch(exist_ok=True)
 
-    # Don't recreate if already running
     if _session_exists(session):
         log(f"tmux session '{session}' already running — attach with: tmux attach -t {session}")
         return
 
-    # Create detached session; first pane gets silpi.log
-    subprocess.run(
-        ["tmux", "new-session", "-d", "-s", session, "-n", "logs"],
-        check=True,
-    )
-    _send(session, 0, f"tail -f {log_dir / 'silpi.log'}")
-    _set_title(session, 0, "Silpi")
-
-    # Add viharapala and parikshaka panes
-    for i, name in enumerate(_AGENTS[1:], start=1):
+    try:
+        # First pane: silpi — command passed directly, no send-keys needed
         subprocess.run(
-            ["tmux", "split-window", "-h", "-t", f"{session}:logs"],
+            ["tmux", "new-session", "-d", "-s", session, "-n", "logs",
+             f"tail -f {log_dir / 'silpi.log'}"],
             check=True,
         )
-        _send(session, i, f"tail -f {log_dir / f'{name}.log'}")
-        _set_title(session, i, name.capitalize())
+        # Enable pane border titles (top bar showing pane name)
+        subprocess.run(
+            ["tmux", "set-option", "-t", session, "pane-border-status", "top"],
+            check=True,
+        )
+        subprocess.run(
+            ["tmux", "set-option", "-t", session, "pane-border-format",
+             " #{pane_title} "],
+            check=True,
+        )
+        # Title the silpi pane — newly created pane is always active,
+        # so targeting the window without a pane index hits the right one
+        _set_title(session, f"shreni-silpi")
 
-    # Even horizontal layout so all three panes share space equally
-    subprocess.run(
-        ["tmux", "select-layout", "-t", f"{session}:logs", "even-horizontal"],
-        check=True,
-    )
+        # Remaining panes: split horizontally, title immediately after creation
+        for name in _AGENTS[1:]:
+            subprocess.run(
+                ["tmux", "split-window", "-h", "-t", f"{session}:logs",
+                 f"tail -f {log_dir / f'{name}.log'}"],
+                check=True,
+            )
+            _set_title(session, f"shreni-{name}")
 
-    # Focus the silpi pane
-    subprocess.run(
-        ["tmux", "select-pane", "-t", f"{session}:logs.0"],
-        check=True,
-    )
+        # Equalise pane widths
+        subprocess.run(
+            ["tmux", "select-layout", "-t", f"{session}:logs", "even-horizontal"],
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        log(f"Warning: tmux session setup failed ({e}) — monitor logs manually:")
+        for name in _AGENTS:
+            log(f"  tail -f {log_dir / f'{name}.log'}")
+        return
 
     log(f"tmux session '{session}' started.")
     log(f"  Attach: tmux attach -t {session}")
@@ -82,15 +96,9 @@ def _session_exists(session: str) -> bool:
     return result.returncode == 0
 
 
-def _send(session: str, pane: int, cmd: str) -> None:
+def _set_title(session: str, title: str) -> None:
+    """Set the title of the currently active pane in the logs window."""
     subprocess.run(
-        ["tmux", "send-keys", "-t", f"{session}:logs.{pane}", cmd, "Enter"],
-        check=True,
-    )
-
-
-def _set_title(session: str, pane: int, title: str) -> None:
-    subprocess.run(
-        ["tmux", "select-pane", "-t", f"{session}:logs.{pane}", "-T", title],
+        ["tmux", "select-pane", "-t", f"{session}:logs", "-T", title],
         check=True,
     )

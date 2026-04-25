@@ -95,6 +95,18 @@ def _check_claude_installed() -> None:
     print("  ✓ claude installed")
 
 
+def _check_graphify_installed() -> None:
+    if shutil.which("graphify") is None:
+        print("\n  ✗ graphify — not installed")
+        print("\n" + "━" * 56)
+        print("  Machine setup required — install Graphify, then re-run:")
+        print("  shreni init --repo <path>")
+        print("━" * 56)
+        print("\n  pip install graphifyy && graphify install\n")
+        sys.exit(1)
+    print("  ✓ graphify installed")
+
+
 # ── Phase 2: Per-project setup ────────────────────────────────────────────────
 
 def _bd_prefix(project_name: str) -> str:
@@ -156,6 +168,38 @@ def _gitignore_beads(ctx: Context) -> None:
             check=True, cwd=ctx.repo_root,
         )
         log(".beads/ removed from git index and committed.")
+
+
+def _run_graphify(ctx: Context) -> None:
+    """Build the initial knowledge graph and install git hooks for auto-rebuild."""
+    graphify_out = ctx.repo_root / "graphify-out"
+    if graphify_out.exists():
+        log("graphify-out/ exists — skipping initial graph build.")
+    else:
+        log("Building knowledge graph with graphify...")
+        subprocess.run(
+            ["graphify", ".", "--no-viz"],
+            check=True, cwd=ctx.repo_root,
+        )
+        log("Knowledge graph built → graphify-out/")
+
+    log("Installing graphify git hooks...")
+    subprocess.run(
+        ["graphify", "hook", "install"],
+        check=True, cwd=ctx.repo_root,
+    )
+    log("graphify git hooks installed (auto-rebuild on commit/branch switch).")
+
+    gitignore = ctx.repo_root / ".gitignore"
+    content = gitignore.read_text() if gitignore.exists() else ""
+    if "graphify-out/" not in content:
+        with gitignore.open("a") as f:
+            if content and not content.endswith("\n"):
+                f.write("\n")
+            f.write("graphify-out/\n")
+        log("graphify-out/ added to .gitignore.")
+    else:
+        log("graphify-out/ already in .gitignore — skipping.")
 
 
 def _configure_beads_backup(ctx: Context) -> None:
@@ -242,6 +286,7 @@ async def run_init(ctx: Context) -> None:
     _check_bd_installed()
     _check_claude_installed()
     _check_dolt_installed()
+    _check_graphify_installed()
     github_username = _check_gh_installed()
 
     # ── Phase 2: Per-project setup ────────────────────────────────────────────
@@ -257,6 +302,9 @@ async def run_init(ctx: Context) -> None:
     log_file.parent.mkdir(parents=True, exist_ok=True)
     install_backup(ctx.repo_root, log_file)
     log(f"bd backup cron installed (every 5 min). Log → {log_file}")
+
+    # ── Graphify knowledge graph ──────────────────────────────────────────────
+    _run_graphify(ctx)
 
     # ── CLAUDE.md ─────────────────────────────────────────────────────────────
     if (ctx.repo_root / "CLAUDE.md").exists():

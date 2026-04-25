@@ -260,6 +260,75 @@ finished and to pick up the new tasks. Do not skip this step.
 
 ---
 
+## Known Failure Patterns to Avoid
+
+These patterns are derived from recurring bugs found across the test suite. Apply
+them proactively — Parikshaka will catch them, but you should not require that loop.
+
+### Async sequencing
+
+The most common class of bug. Toast flicker, dialog-not-closing, and
+page/context-closed errors all share the same root cause: a UI transition fires
+before the async operation that should gate it has resolved.
+
+Rules:
+- Never navigate, close a dialog, or show a success toast until the server promise
+  has resolved — not on click, not optimistically
+- Cancel in-flight fetches and unsubscribe from any subscriptions before the
+  component unmounts or the route changes; unguarded async continuations crash the
+  page context after navigation
+- Sequence the toast and the dialog close off the **same** resolved promise:
+  `await serverCall(); closeDialog(); showToast();` — not in separate effects
+
+### Toast visibility
+
+Toasts that disappear before an assertion can capture them are a persistent source
+of flakiness, especially under parallel runs and on slower browsers.
+
+Rules:
+- Toasts must have a minimum display duration of at least 4 seconds
+- Fire the toast only after the server confirms success, never before
+- Do not dismiss the toast on route change if the navigation happens within the
+  same tick the toast appeared
+
+### Browser compatibility — Firefox
+
+Firefox diverges from Chromium/WebKit on several APIs that cause silent failures:
+
+- **Drag-and-drop**: Synthetic drag events require explicit `dataTransfer` setup
+  (`dataTransfer.setData(...)`) — without it, `dragstart`/`drop` fire but carry
+  no payload and the drop target ignores them
+- **Streaming responses**: `EventSource` behaviour differs; use
+  `fetch` + `ReadableStream` reader for AI/streaming endpoints so the response
+  renders progressively across all browsers
+- **Navigation timeouts**: Firefox is slower to signal `load` after some server
+  response patterns; add a `networkidle` or `domcontentloaded` wait where
+  `page.goto` times out on Firefox
+
+### Parallel test isolation
+
+Features that write shared or global state (AI config, user invites, class
+records, chat history) will collide under parallel test runs.
+
+Rules:
+- Scope every piece of mutable state to a per-test tenant, user, or unique ID
+  generated at fixture setup time
+- Do not rely on implicit ordering between workers — assume any other test may
+  be modifying the same table concurrently
+
+### Selector uniqueness
+
+When the same user-visible string appears in more than one DOM location,
+Playwright's strict mode raises an error and the test fails.
+
+Rules:
+- Never render the same status label or semantic text in multiple independent
+  DOM subtrees without a unique containing scope
+- Add `data-testid` attributes to canonical/primary instances of repeated
+  elements (e.g. a status badge that appears in both a list row and a detail panel)
+
+---
+
 ## Rules
 
 - Never close a task yourself — the orchestrator does that after merge
