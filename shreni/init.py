@@ -3,13 +3,14 @@
 Two phases:
 
   Phase 1 — Machine prerequisites (one-time per machine)
-    Checks dolt is installed, credentials exist, and are verified with DoltHub.
+    Checks dolt, bd, claude, and gh CLI are installed and authenticated.
     If anything is missing, prints the exact steps needed and exits.
     Re-run `shreni init` after completing them.
 
   Phase 2 — Per-project setup
-    bd init, beads backup config, DoltHub remote, initial push,
-    backup cron, CLAUDE.md.
+    bd init, beads backup config, GitHub issues repo, backup cron, CLAUDE.md.
+    Issue data is backed up as JSONL to a dedicated GitHub repo
+    (<project>-issues) via plain git — no DoltHub credentials needed.
 """
 
 import re
@@ -21,7 +22,7 @@ from pathlib import Path
 import anyio
 
 from .agents import silpi as silpi_agent
-from .backup import install as install_backup, is_installed as backup_installed
+from .backup import install as install_backup
 from .context import Context
 from .shell import log, make_logger
 
@@ -30,66 +31,44 @@ _silpi = make_logger("Silpi")
 
 # ── Phase 1: Machine prerequisites ────────────────────────────────────────────
 
-def _check_machine_prerequisites() -> str:
-    """Check dolt install, credentials, and DoltHub verification.
-
-    Returns the DoltHub username on success.
-    Prints what the user needs to do and exits if anything is missing.
-    """
-    missing: list[str] = []
-
-    # 1. dolt CLI installed?
+def _check_dolt_installed() -> None:
     if shutil.which("dolt") is None:
         print("\n  ✗ dolt — not installed")
         print("\n" + "━" * 56)
-        print("  Machine setup required — complete these steps, then")
-        print("  re-run:  shreni init --repo <path>")
+        print("  Machine setup required — install dolt, then re-run:")
+        print("  shreni init --repo <path>")
         print("━" * 56)
-        print("\n  Step 1 — Install dolt:")
-        print("    brew install dolt\n")
+        print("\n  brew install dolt\n")
         sys.exit(1)
-
     print("  ✓ dolt installed")
 
-    # 2. Dolt credentials exist?
-    creds = subprocess.run(["dolt", "creds", "ls"], capture_output=True, text=True)
-    if creds.returncode != 0 or not creds.stdout.strip():
-        missing.append("creds")
 
-    # 3. Credentials verified with DoltHub?
-    dolthub_username = None
-    if not missing:
-        check = subprocess.run(
-            ["dolt", "creds", "check", "--endpoint", "doltremoteapi.dolthub.com:443"],
-            capture_output=True, text=True,
-        )
-        output = check.stdout + check.stderr
-        for line in output.splitlines():
-            if line.strip().lower().startswith("user:"):
-                dolthub_username = line.split(":", 1)[1].strip()
-                break
-        if not dolthub_username:
-            missing.append("verified")
+def _check_gh_installed() -> str:
+    """Check gh CLI is installed and authenticated. Returns GitHub username."""
+    if shutil.which("gh") is None:
+        print("\n  ✗ gh — not installed")
+        print("\n" + "━" * 56)
+        print("  Machine setup required — install GitHub CLI, then re-run:")
+        print("  shreni init --repo <path>")
+        print("━" * 56)
+        print("\n  brew install gh && gh auth login\n")
+        sys.exit(1)
+    print("  ✓ gh installed")
 
-    if missing:
-        print("\n  ✗ DoltHub credentials not set up\n")
+    result = subprocess.run(
+        ["gh", "api", "user", "--jq", ".login"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        print("\n  ✗ gh — not authenticated")
+        print("\n" + "━" * 56)
+        print("  Run: gh auth login")
         print("━" * 56)
-        print("  Machine setup required — complete these steps, then")
-        print("  re-run:  shreni init --repo <path>")
-        print("━" * 56)
-        if "creds" in missing:
-            print("\n  Step 2 — Generate DoltHub credentials:")
-            print("    dolt creds new\n")
-            print("  Step 3 — Add the public key to your DoltHub account:")
-            print("    dolt creds ls   ← copy this output")
-            print("    → https://dolthub.com/settings/credentials")
-            print("      paste the key and save\n")
-        print("  Step 4 — Verify credentials (note the 'User:' value):")
-        print("    dolt creds check --endpoint doltremoteapi.dolthub.com:443\n")
         sys.exit(1)
 
-    print(f"  ✓ DoltHub credentials verified (User: {dolthub_username})")
-    return dolthub_username
+    username = result.stdout.strip()
+    print(f"  ✓ gh authenticated (User: {username})")
+    return username
 
 
 def _check_bd_installed() -> None:
@@ -124,15 +103,59 @@ def _bd_prefix(project_name: str) -> str:
 
 
 def _ensure_bd_initialized(ctx: Context) -> str:
-    """Run bd init if .beads/ doesn't exist. Returns the prefix used."""
+    """Run bd init if the prefix database directory does not exist yet.
+
+    Checks for .beads/embeddeddolt/<prefix>/ specifically — not just .beads/.
+    This avoids re-running bd init when the database already exists (bd init
+    refuses with an error if any database directory is found in embeddeddolt/).
+    """
     prefix = _bd_prefix(ctx.project_name)
-    if (ctx.repo_root / ".beads").exists():
-        log("bd already initialized — skipping bd init.")
+    dolt_path = ctx.repo_root / ".beads" / "embeddeddolt" / prefix
+    if dolt_path.exists():
+        log(f"bd database '{prefix}' exists — skipping bd init.")
         return prefix
     log(f"Initializing bd with prefix '{prefix}'...")
-    subprocess.run(["bd", "init", "--prefix", prefix], check=True, cwd=ctx.repo_root)
-    log("bd initialized.")
+    subprocess.run(
+        ["bd", "init", "--prefix", prefix, "--non-interactive"],
+        check=True, cwd=ctx.repo_root,
+    )
+    log(f"bd initialized with prefix '{prefix}'.")
     return prefix
+
+
+def _gitignore_beads(ctx: Context) -> None:
+    """Ensure .beads/ is in .gitignore and untracked from git.
+
+    Dolt already versions all task state in .beads/embeddeddolt/. Tracking
+    .beads/ in project git causes checkout conflicts when agents switch branches
+    after running bd commands that write to .beads/issues.jsonl.
+    """
+    gitignore = ctx.repo_root / ".gitignore"
+    content = gitignore.read_text() if gitignore.exists() else ""
+    if ".beads/" not in content:
+        with gitignore.open("a") as f:
+            if content and not content.endswith("\n"):
+                f.write("\n")
+            f.write(".beads/\n")
+        log(".beads/ added to .gitignore.")
+    else:
+        log(".beads/ already in .gitignore — skipping.")
+
+    # Remove from git index if currently tracked
+    result = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", ".beads/"],
+        capture_output=True, cwd=ctx.repo_root,
+    )
+    if result.returncode == 0:
+        subprocess.run(
+            ["git", "rm", "-r", "--cached", ".beads/"],
+            check=True, cwd=ctx.repo_root,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "chore: stop tracking .beads/ (Dolt is the source of truth)"],
+            check=True, cwd=ctx.repo_root,
+        )
+        log(".beads/ removed from git index and committed.")
 
 
 def _configure_beads_backup(ctx: Context) -> None:
@@ -154,68 +177,58 @@ def _configure_beads_backup(ctx: Context) -> None:
     log("Backup config written to .beads/config.yaml")
 
 
-def _add_dolthub_remote(ctx: Context, dolthub_username: str, db_name: str, prefix: str) -> None:
-    """Register the DoltHub remote using dolt CLI directly (bd dolt hangs due to port bug)."""
-    remote_url = f"https://doltremoteapi.dolthub.com/{dolthub_username}/{db_name}"
-    dolt_path = ctx.repo_root / ".beads" / "embeddeddolt" / prefix
-    if not dolt_path.exists():
-        log(f"Warning: dolt db path not found at {dolt_path} — skipping remote add.")
+def _init_jsonl_backup_repo(ctx: Context, github_username: str, repo_name: str) -> None:
+    """Create the GitHub issues repo and init .beads/backup/ as its local clone."""
+    backup_dir = ctx.repo_root / ".beads" / "backup"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    if (backup_dir / ".git").exists():
+        log("JSONL backup repo already initialized — skipping.")
         return
-    log(f"Adding DoltHub remote: {remote_url}")
-    # Check if remote already exists
-    check = subprocess.run(
-        ["dolt", "remote", "-v"],
-        capture_output=True, text=True, cwd=dolt_path,
-    )
-    if "origin" in check.stdout:
-        log("Remote 'origin' already exists — skipping.")
-        return
+
+    remote_url = f"git@github.com:{github_username}/{repo_name}.git"
+
+    # Create the GitHub repo (private). Ignore "already exists" errors.
+    log(f"Creating GitHub repo: {github_username}/{repo_name}")
     result = subprocess.run(
-        ["dolt", "remote", "add", "origin", remote_url],
-        capture_output=True, text=True, cwd=dolt_path,
+        ["gh", "repo", "create", repo_name, "--private"],
+        capture_output=True, text=True,
     )
-    if result.returncode != 0:
-        log(f"Warning: dolt remote add failed: {result.stderr.strip()}")
-        log(f"Add it manually: cd {dolt_path} && dolt remote add origin {remote_url}")
+    if result.returncode != 0 and "already exists" not in result.stderr:
+        log(f"Warning: gh repo create failed: {result.stderr.strip()}")
+        log(f"Create it manually: gh repo create {repo_name} --private")
     else:
-        log("Remote added.")
+        log(f"GitHub repo ready: github.com/{github_username}/{repo_name}")
 
+    # Init local git repo inside .beads/backup/
+    subprocess.run(["git", "init", "-b", "main"], check=True, cwd=backup_dir)
+    subprocess.run(["git", "remote", "add", "origin", remote_url], check=True, cwd=backup_dir)
 
-def _initial_push(ctx: Context, prefix: str) -> None:
-    """Push to DoltHub using direct dolt CLI (bypasses bd dolt push port bug)."""
-    dolt_path = ctx.repo_root / ".beads" / "embeddeddolt" / prefix
-    if not dolt_path.exists():
-        log(f"Warning: dolt db path not found at {dolt_path} — skipping initial push.")
-        return
-    log(f"Pushing to DoltHub...")
+    # Write a .gitignore for the backup repo itself
+    gitignore = backup_dir / ".gitignore"
+    if not gitignore.exists():
+        gitignore.write_text("*.lock\n*.tmp\n.DS_Store\n")
+
+    # Seed with issues.jsonl if beads has already exported one
+    issues_src = ctx.repo_root / ".beads" / "issues.jsonl"
+    if issues_src.exists():
+        import shutil as _shutil
+        _shutil.copy2(issues_src, backup_dir / "issues.jsonl")
+    subprocess.run(["git", "add", "issues.jsonl", ".gitignore"], cwd=backup_dir)
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-m", "init: beads issue backup"],
+        check=True, cwd=backup_dir,
+    )
+
     result = subprocess.run(
-        ["dolt", "push", "origin", "main"],
-        capture_output=True, text=True, cwd=dolt_path,
+        ["git", "push", "--force", "-u", "origin", "main"],
+        capture_output=True, text=True, cwd=backup_dir,
     )
     if result.returncode != 0:
         log(f"Warning: initial push failed: {result.stderr.strip()}")
-        log("Ensure the DoltHub repo exists, then push manually:")
-        log(f"  cd {dolt_path} && dolt push origin main")
+        log(f"Push manually: cd {backup_dir} && git push --force -u origin main")
     else:
-        log("Initial push to DoltHub complete.")
-
-
-def _print_dolthub_repo_instructions(ctx: Context, dolthub_username: str, db_name: str) -> None:
-    prefix = _bd_prefix(ctx.project_name)
-    dolt_path = ctx.repo_root / ".beads" / "embeddeddolt" / prefix
-    print(f"""
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ACTION REQUIRED — Create the DoltHub repository
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  Before continuing, create the DoltHub database:
-
-  Step 5 → https://dolthub.com/repositories/new
-           Name it exactly:  {db_name}
-
-  Then press Enter to continue...
-""", flush=True)
-    input()
+        log(f"Initial push complete → github.com/{github_username}/{repo_name}")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -228,27 +241,22 @@ async def run_init(ctx: Context) -> None:
     log("Checking prerequisites...")
     _check_bd_installed()
     _check_claude_installed()
-    dolthub_username = _check_machine_prerequisites()
+    _check_dolt_installed()
+    github_username = _check_gh_installed()
 
     # ── Phase 2: Per-project setup ────────────────────────────────────────────
     prefix = _ensure_bd_initialized(ctx)
+    _gitignore_beads(ctx)
     _configure_beads_backup(ctx)
 
-    # Prompt user to create the DoltHub repo before we try to push
-    db_name = f"{prefix}-beads"
-    _print_dolthub_repo_instructions(ctx, dolthub_username, db_name)
+    issues_repo = f"{prefix}-issues"
+    _init_jsonl_backup_repo(ctx, github_username, issues_repo)
 
-    _add_dolthub_remote(ctx, dolthub_username, db_name, prefix)
-    _initial_push(ctx, prefix)
-
-    # ── Backup cron (dolt push every 5 min) ──────────────────────────────────
+    # ── Backup cron (git push every 5 min) ───────────────────────────────────
     log_file = ctx.repo_root / ".claude" / "bd-backup.log"
     log_file.parent.mkdir(parents=True, exist_ok=True)
-    if backup_installed(ctx.repo_root):
-        log("bd backup cron already installed — skipping.")
-    else:
-        install_backup(ctx.repo_root, log_file)
-        log(f"bd backup cron installed (every 5 min). Log → {log_file}")
+    install_backup(ctx.repo_root, log_file)
+    log(f"bd backup cron installed (every 5 min). Log → {log_file}")
 
     # ── CLAUDE.md ─────────────────────────────────────────────────────────────
     if (ctx.repo_root / "CLAUDE.md").exists():
@@ -261,7 +269,7 @@ async def run_init(ctx: Context) -> None:
     # ── Done ──────────────────────────────────────────────────────────────────
     log("━" * 50)
     log(f"Project '{ctx.project_name}' is ready.")
-    log(f"  DoltHub: https://www.dolthub.com/{dolthub_username}/{db_name}")
+    log(f"  Issues backup: github.com/{github_username}/{issues_repo}")
     log(f"  Backup log: {log_file}")
     log(f"  Run: shreni run --repo {ctx.repo_root}")
     log("━" * 50)

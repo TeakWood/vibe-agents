@@ -27,6 +27,7 @@ from ..git import (
     merge_squash_and_commit,
     pull,
     push,
+    task_merged_to_main,
 )
 from ..shell import log, make_logger
 from ..state import clear_task
@@ -94,6 +95,14 @@ async def run_task_loop(
         # ── Merge ─────────────────────────────────────────────────────────────
         if state == "merge":
             if not branch_has_commits(branch, ctx):
+                if task_merged_to_main(task_id, ctx):
+                    # Merge landed in main but bd close failed previously.
+                    # Close it now and exit cleanly rather than re-implementing.
+                    log(f"Task {task_id} already merged to main — closing.")
+                    close_task(task_id, "Approved and merged to main", ctx)
+                    clear_task(ctx)
+                    return task
+
                 # Branch is empty or missing — Silpi never committed anything.
                 # Re-route to implement rather than ghost-merging.
                 log(f"Branch {branch} has no commits ahead of main — Silpi did not commit. Re-implementing.")

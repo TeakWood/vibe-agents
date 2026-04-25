@@ -48,3 +48,16 @@ def branch_has_commits(branch: str, ctx: Context) -> bool:
     if not branch_exists(branch, ctx):
         return False
     return bool(log_range("main", branch, ctx))
+
+
+def task_merged_to_main(task_id: str, ctx: Context) -> bool:
+    """Return True if a merge commit for task_id already exists on main.
+
+    Merge commits are written as "<task_id>: Merge feature/..." so grepping
+    the task_id is sufficient to detect a completed merge.
+    """
+    out = run_cmd_output(
+        ["git", "log", "main", "--oneline", "--grep", task_id],
+        ctx.repo_root,
+    )
+    return bool(out.strip())

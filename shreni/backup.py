@@ -1,8 +1,8 @@
-"""Manage the bd → DoltHub backup cron job (dolt push every 5 minutes).
+"""Manage the beads JSONL → GitHub backup cron job (git push every 5 minutes).
 
-The push command bypasses bd dolt push (which has a port bug in server mode)
-and calls dolt directly from the embedded dolt repo path:
-  .beads/embeddeddolt/<prefix>/
+Beads auto-exports issue data as JSONL to .beads/backup/ on its own interval.
+This cron job commits and force-pushes that directory to a dedicated GitHub
+repo (<project>-issues), giving off-machine backup with standard git/SSH auth.
 """
 
 import shlex
@@ -17,28 +17,30 @@ def _marker(repo_root: Path) -> str:
     return f"# shreni-bd-backup:{repo_root}"
 
 
-def _dolt_db_path(repo_root: Path) -> Path | None:
-    """Locate the embedded dolt repo inside .beads/embeddeddolt/."""
-    dolt_dir = repo_root / ".beads" / "embeddeddolt"
-    if not dolt_dir.exists():
-        return None
-    subdirs = [d for d in dolt_dir.iterdir() if d.is_dir()]
-    return subdirs[0] if subdirs else None
+def _backup_dir(repo_root: Path) -> Path:
+    return repo_root / ".beads" / "backup"
 
 
 def install(repo_root: Path, log_file: Path) -> None:
     """Install (or replace) the bd backup cron entry for this repo."""
-    db_path = _dolt_db_path(repo_root)
-    if db_path is None:
-        raise RuntimeError(f"Cannot find embedded dolt repo under {repo_root}/.beads/embeddeddolt/")
+    backup_dir = _backup_dir(repo_root)
+    if not backup_dir.exists():
+        raise RuntimeError(f"Backup dir not found: {backup_dir} — run shreni init first")
 
-    current = _read()
-    lines = _remove_block(current.splitlines(), repo_root)
-
+    # bd writes JSONL to .beads/issues.jsonl; copy it into the backup git repo
+    # before committing so the GitHub repo always has the latest snapshot.
+    issues_src = shlex.quote(str(repo_root / ".beads" / "issues.jsonl"))
+    issues_dst = shlex.quote(str(backup_dir / "issues.jsonl"))
     push_cmd = (
-        f"cd {shlex.quote(str(db_path))} && dolt push origin main"
+        f"cp {issues_src} {issues_dst} 2>/dev/null;"
+        f" cd {shlex.quote(str(backup_dir))}"
+        f" && git add issues.jsonl"
+        f" && git commit --allow-empty -m backup"
+        f" && git push --force origin main"
         f" >> {shlex.quote(str(log_file))} 2>&1"
     )
+    current = _read()
+    lines = _remove_block(current.splitlines(), repo_root)
     lines += [
         _marker(repo_root),
         f"{_CRON_SCHEDULE} {push_cmd}",
