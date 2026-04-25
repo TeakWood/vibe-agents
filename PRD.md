@@ -28,6 +28,15 @@ The human remains in the loop for decisions that require judgment: approving epi
 
 ## User Stories
 
+### Project setup
+
+> As a developer, I want to set up a new project for Shreni with a single command so the tracker, backup, and CLAUDE.md are all configured correctly without me reading documentation.
+
+- The developer runs `shreni init --repo /path/to/repo`.
+- Shreni checks machine prerequisites (dolt CLI, DoltHub credentials) and prints exact remediation steps with exit if anything is missing.
+- Once prerequisites pass, Shreni initialises `bd`, configures DoltHub backup (push every 5 minutes), and uses Silpi to generate `CLAUDE.md`.
+- The developer sees a confirmation with the DoltHub URL and the command to start the orchestrator.
+
 ### Autonomous implementation
 
 > As a developer, I want to add a task to my backlog and have it implemented, tested, reviewed, and merged without me doing it myself.
@@ -102,7 +111,7 @@ The human remains in the loop for decisions that require judgment: approving epi
 | F3 | Silpi must run the project build before marking a task ready for review. |
 | F4 | Viharapala must run quality gates and write a structured review comment before setting a verdict. |
 | F5 | If Viharapala returns `changes-required`, Silpi must address all blocking issues and resubmit. The loop repeats until approval or manual intervention. |
-| F6 | An approved task must be squash-merged to `main`, pushed, and closed in `bd`. |
+| F6 | An approved task must be squash-merged to `main`, pushed, and closed in `bd`. The merge must be skipped if the branch has no commits ahead of `main`; instead the task must be re-routed to Silpi for implementation. |
 | F7 | Epics must go through: design proposal → Viharapala design review → author approval → Silpi task breakdown → normal task loop. |
 | F8 | Tasks sharing a parent epic must be prioritised over unrelated tasks so work within a group completes before new groups start. |
 | F9 | After each task merge, Sthapathi must enqueue it for Parikshaka and continue to the next task immediately — the main loop must not block on Parikshaka. |
@@ -112,15 +121,20 @@ The human remains in the loop for decisions that require judgment: approving epi
 | F13 | On e2e failure, Parikshaka must create a `bd` bug task (`type=bug, priority=1, label=parikshaka`) for each distinct failing test, unless an open bug with the same title already exists. |
 | F14 | Parikshaka must create a `bd` feature task (`type=feature, label=e2e`) for any user-facing behaviour introduced by the merged task that is not already covered by an existing e2e test. It must not create duplicate coverage tasks. |
 | F15 | Silpi must recognise `label=e2e` tasks and follow the e2e test authoring flow: write tests, run the suite, commit only test files, submit for review. |
-| F16 | On startup, Sthapathi must check for a `CLAUDE.md` in the target repo and create or update it if absent, capturing build, test, lint, dev server, env vars, key directories, coding conventions, and issue tracker rules (including the `manual`/`parikshaka`/`e2e` label conventions and task creation order). |
+| F16 | `shreni init` must create or update `CLAUDE.md` using Silpi, capturing build, test, lint, dev server, env vars, key directories, coding conventions, and issue tracker rules (including the `manual`/`parikshaka`/`e2e` label conventions and task creation order). `shreni run` must exit with an error if `CLAUDE.md` is absent. |
 | F17 | On crash or restart, Sthapathi must resume in-progress work without re-implementing already-completed steps. |
+| F18 | `shreni init` must check machine prerequisites (dolt CLI installed, DoltHub credentials present, credentials verified via `dolt creds check`). On any failure it must print exact remediation steps and exit immediately. Per-project setup must not proceed until all prerequisites pass. |
+| F19 | `shreni init` must run `bd init --prefix <slug>` if `.beads/` does not already exist, where the slug is derived from the project name (lowercase, hyphens). |
+| F20 | `shreni init` must append backup configuration to `.beads/config.yaml` (`enabled: true`, `git-push: false`, `interval: 15m`) if not already present. `git-push: false` is required to prevent backup commits from racing with agent commits. |
+| F21 | `shreni init` must register a DoltHub remote (`bd dolt remote add origin https://doltremoteapi.dolthub.com/<user>/<db>`) and perform an initial push using `dolt push origin main` directly from `.beads/embeddeddolt/<prefix>/`. |
+| F22 | `shreni init` must install a cron job that pushes `<repo>/.beads/embeddeddolt/<prefix>/` to DoltHub every 5 minutes using `dolt push origin main`. The push must be invoked directly (not via `bd dolt push`) to avoid the `bd dolt push` port bug in server mode. |
 
 ### Non-functional
 
 | # | Requirement |
 |---|-------------|
 | N1 | No global state — all runtime configuration flows through the `Context` dataclass. |
-| N2 | Log output must include timestamp and agent name for every message. |
+| N2 | Log output must include timestamp and agent name for every message, with distinct ANSI colours per agent for dark-background terminals. |
 | N3 | All `bd` task state transitions must use `--json` for structured, parseable output. |
 | N4 | The Parikshaka background worker must process tasks sequentially to avoid concurrent `bd` writes or e2e suite conflicts. |
 | N5 | The system must not run inside an active Claude Code session (`CLAUDECODE` env var check on startup). |
@@ -131,6 +145,9 @@ The human remains in the loop for decisions that require judgment: approving epi
 
 | Responsibility | Sthapathi | Silpi | Viharapala | Parikshaka |
 |---------------|-----------|-------|------------|------------|
+| Check machine prerequisites | ✅ | | | |
+| Initialise bd, DoltHub remote, backup cron | ✅ | | | |
+| Create/update CLAUDE.md | | ✅ | | |
 | Pick tasks from backlog | ✅ | | | |
 | Create/delete feature branches | ✅ | | | |
 | Write production code and unit tests | | ✅ | | |
@@ -148,13 +165,22 @@ The human remains in the loop for decisions that require judgment: approving epi
 | Run e2e suite | | | | ✅ |
 | Create regression bug tasks | | | | ✅ |
 | Create e2e coverage tasks | | | | ✅ |
-| Initialise CLAUDE.md | | ✅ | | |
 
 ---
 
 ## Workflow Diagram
 
 ```
+shreni init --repo /path/to/repo
+  ├── Phase 1: check dolt, DoltHub credentials → exit with instructions if missing
+  └── Phase 2: bd init, .beads/config.yaml, DoltHub remote, initial push,
+               backup cron (every 5 min), Silpi generates CLAUDE.md
+         │
+         ▼
+shreni run --repo /path/to/repo
+  └── checks CLAUDE.md present (exits with error if missing)
+         │
+         ▼
 Developer adds task to bd
          │
          ▼
@@ -175,6 +201,9 @@ approved   changes-required
     │         │
     │         └──► Viharapala: re-review (loop)
     │
+    ▼
+Sthapathi: branch has commits? ──No──► re-route to Silpi
+    │ Yes
     ▼
 Sthapathi: squash-merge → main → push → close task
     │

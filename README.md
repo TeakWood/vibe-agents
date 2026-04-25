@@ -35,17 +35,27 @@ To install manually:
 claude plugin install frontend-design@claude-code-plugins
 ```
 
-## Running
+## Usage
+
+Must be run **outside** any active Claude Code session (open a plain terminal).
+
+### Initialise a new project (once per repo)
 
 ```bash
-# Python runner
-python run.py --repo /path/to/repo [--project-name MyProject]
-
-# Or via the installed CLI
-shreni --repo /path/to/repo [--project-name MyProject]
-
-# Bash runner (plain tmux session, outside Claude Code)
-bash run.sh /path/to/repo [ProjectName]
+uv run shreni init --repo /path/to/repo [--project-name MyProject]
 ```
 
-Must be run **outside** any active Claude Code session.
+Checks prerequisites (dolt, DoltHub credentials), initialises `bd`, configures DoltHub backup, and generates `CLAUDE.md`.
+
+### Run the orchestrator
+
+```bash
+uv run shreni run --repo /path/to/repo [--project-name MyProject]
+```
+
+To use `shreni` directly without `uv run`, activate the virtual environment first:
+
+```bash
+source .venv/bin/activate
+shreni run --repo /path/to/repo
+```

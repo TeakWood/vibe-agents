@@ -6,6 +6,22 @@ Shreni is an autonomous multi-agent coding system built on the Claude Agent SDK.
 
 ---
 
+## CLI Commands
+
+```
+shreni init --repo /path/to/repo [--project-name MyProject]
+shreni run  --repo /path/to/repo [--project-name MyProject]
+```
+
+| Command | Purpose |
+|---------|---------|
+| `init` | One-time project setup: prerequisites check, bd init, DoltHub backup, CLAUDE.md |
+| `run` | Run the orchestrator against the task backlog; requires init to have been run first |
+
+`shreni --repo ...` (no subcommand) is equivalent to `shreni run` for backward compatibility.
+
+---
+
 ## System Architecture
 
 ```
@@ -63,7 +79,9 @@ Shreni is an autonomous multi-agent coding system built on the Claude Agent SDK.
 
 ```
 shreni/
-├── sthapathi.py          # Orchestrator: main loop + Parikshaka background worker
+├── sthapathi.py          # CLI entry point: routes init/run subcommands + orchestrator loop
+├── init.py               # shreni init: prerequisites check, bd setup, DoltHub, CLAUDE.md
+├── backup.py             # bd → DoltHub backup cron (dolt push every 5 min)
 ├── context.py            # Runtime dataclass (repo_root, project_name, queue file path, etc.)
 ├── bd.py                 # All Beads CLI interactions
 ├── state.py              # Crash-recovery state files (.claude/)
@@ -98,6 +116,70 @@ parikshaka/
 ├── AGENTS.md             # Parikshaka instructions: run e2e, triage regressions and coverage gaps
 └── SOUL.md               # Parikshaka persona and values
 ```
+
+---
+
+## Project Initialisation (`shreni init`)
+
+`init.py` runs in two phases. If any prerequisite is missing it prints the exact steps needed and exits — the user re-runs `shreni init` after completing them.
+
+### Phase 1 — Machine prerequisites (one-time per machine)
+
+| Check | Command | Failure action |
+|-------|---------|----------------|
+| `bd` installed | `which bd` | Print install link, exit |
+| `claude` installed | `which claude` | Print install link, exit |
+| `dolt` installed | `which dolt` | Print `brew install dolt`, exit |
+| Dolt credentials exist | `dolt creds ls` | Print steps: `dolt creds new` + add key to DoltHub, exit |
+| Credentials verified | `dolt creds check --endpoint doltremoteapi.dolthub.com:443` | Print verification steps, exit |
+
+The `User:` value from `dolt creds check` is parsed and used as the DoltHub username for subsequent steps.
+
+### Phase 2 — Per-project setup
+
+| Step | Command / Action |
+|------|-----------------|
+| 1 | `bd init --prefix <slug>` — initialises embedded Dolt + sets issue prefix (e.g. `myapp-1`) |
+| 2 | Append backup config to `.beads/config.yaml`: `enabled: true, git-push: false, interval: 15m` |
+| 3 | Prompt user to create the DoltHub repo (`<prefix>-beads`) at dolthub.com, then press Enter |
+| 4 | `bd dolt remote add origin https://doltremoteapi.dolthub.com/<user>/<prefix>-beads` |
+| 5 | `cd .beads/embeddeddolt/<prefix> && dolt push origin main` (direct dolt — bypasses `bd dolt push` port bug) |
+| 6 | Install backup cron: `*/5 * * * * cd .beads/embeddeddolt/<prefix> && dolt push origin main` |
+| 7 | Run Silpi to create `CLAUDE.md` |
+
+**Key constraints learned from production use:**
+- `git-push: false` prevents beads backup commits racing with agent commits on `main`
+- `bd dolt push` has a port bug in server mode; use `dolt push` directly from the embedded repo path
+- DoltHub repo must exist before the first push — push fails silently with "permission denied" if it doesn't
+- The DoltHub remote URL must use the `User:` value from `dolt creds check`, not an email or login name
+
+### `shreni run` precondition
+
+`shreni run` checks for `CLAUDE.md` on startup and exits with a clear error if it is missing:
+
+```
+ERROR: CLAUDE.md not found in /path/to/repo
+Run project initialisation first:
+  shreni init --repo /path/to/repo
+```
+
+---
+
+## bd Storage Layout
+
+Beads stores its data in the target repo under `.beads/`:
+
+```
+<repo>/
+└── .beads/
+    ├── config.yaml               # Backup config (interval, git-push flag)
+    └── embeddeddolt/
+        └── <prefix>/             # Embedded Dolt database (the actual issue store)
+            ├── dolt_config.json
+            └── ...
+```
+
+The backup cron and initial push target `.beads/embeddeddolt/<prefix>/` directly.
 
 ---
 
@@ -144,6 +226,10 @@ task_loop.py — state machine
                                               dequeue_parikshaka(task_id)  ← removes from file
 ```
 
+### Ghost-merge guard
+
+Before every squash-merge, `task_loop.py` checks `branch_has_commits(branch, ctx)` — i.e. `git log main..<branch> --oneline` is non-empty. If the branch exists but has no commits (Silpi failed to commit), it re-routes to `silpi_implement` instead of merging an empty branch. The same guard applies in `resume.py` when picking up `review:approved` tasks.
+
 ### Parikshaka parallel execution
 
 The main loop and the Parikshaka worker run as two concurrent `anyio` tasks inside a `TaskGroup`:
@@ -173,7 +259,7 @@ Merge completes
                                     dequeue_parikshaka()  removes entry from file
 ```
 
-On next startup, `load_parikshaka_queue()` reads any entries still in the file (i.e. not yet processed) and replays them into the worker before the main loop starts.
+On next startup, `load_parikshaka_queue()` reads any entries still in the file and replays them into the worker before the main loop starts.
 
 ### Epic lifecycle
 
@@ -218,7 +304,7 @@ Three JSON files under `<repo>/.claude/`:
 1. `current-task.json` state file
 2. Current git branch (if it looks like a feature branch)
 3. Tasks with `label=review:ready-for-review` → resume at `viharapala_review`
-4. Tasks with `label=review:approved` (non-epic) → resume at `merge`
+4. Tasks with `label=review:approved` (non-epic) and `branch_has_commits` → resume at `merge`; otherwise resume at `silpi_implement`
 
 ### bd label conventions
 
@@ -306,7 +392,7 @@ All runtime configuration flows through the `Context` dataclass. There are no gl
 | Field | Source | Purpose |
 |-------|--------|---------|
 | `repo_root` | `--repo` CLI arg | Target repository path |
-| `project_name` | `--project-name` or `repo_root.name` | Used in agent prompts |
+| `project_name` | `--project-name` or `repo_root.name` | Used in agent prompts and bd prefix |
 | `agents_dir` | Shreni project root | Locates `silpi/`, `viharapala/`, `parikshaka/` prompt dirs |
 | `idle_interval` | Hardcoded default 120s | Sleep time when no tasks are ready |
 
@@ -322,15 +408,23 @@ Path properties on `Context` (all under `<repo>/.claude/`):
 
 ## Logging
 
-Each agent has a named logger produced by `make_logger(agent_name)`:
+Each agent has a named logger produced by `make_logger(agent_name)`. Output is ANSI-coloured for dark terminals:
+
+| Agent | Colour |
+|-------|--------|
+| Timestamp | Dark gray |
+| Sthapathi | Bright cyan |
+| Silpi | Bright green |
+| Viharapala | Bright yellow |
+| Parikshaka | Bright magenta |
 
 ```
-[2026-04-24 10:15:32] [Sthapathi] Task T-42: Add user authentication
-[2026-04-24 10:15:33] [Silpi] [Round 1] implement T-42
-[2026-04-24 10:28:11] [Viharapala] [Round 1] review T-42
-[2026-04-24 10:29:00] [Sthapathi] Task T-42 complete.
-[2026-04-24 10:29:01] [Sthapathi] Task T-43: Add password reset
-[2026-04-24 10:29:01] [Parikshaka] Quality check for T-42 ('Add user authentication')...
+[2026-04-25 10:15:32] [Sthapathi] Task T-42: Add user authentication
+[2026-04-25 10:15:33] [Silpi] [Round 1] implement T-42
+[2026-04-25 10:28:11] [Viharapala] [Round 1] review T-42
+[2026-04-25 10:29:00] [Sthapathi] Task T-42 complete.
+[2026-04-25 10:29:01] [Sthapathi] Task T-43: Add password reset
+[2026-04-25 10:29:01] [Parikshaka] Quality check for T-42 ('Add user authentication')...
 ```
 
 Parikshaka logs appear interleaved with the main loop — it runs in the background while the next task is already being implemented.
@@ -339,9 +433,10 @@ Parikshaka logs appear interleaved with the main loop — it runs in the backgro
 
 ## Dependencies
 
-| Package | Purpose |
-|---------|---------|
+| Package / Tool | Purpose |
+|----------------|---------|
 | `claude-agent-sdk` | Claude sub-agent runner |
 | `anyio` | Async runtime and memory object streams for the Parikshaka background worker |
 | `bd` (CLI, external) | Beads issue tracker — task management |
+| `dolt` (CLI, external) | Dolt CLI — DoltHub credential management and direct push |
 | `claude` (CLI, external) | Claude Code CLI — plugin installation |

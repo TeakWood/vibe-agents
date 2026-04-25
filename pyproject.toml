@@ -9,7 +9,7 @@ dependencies = [
 
 [project.scripts]
 install-plugins = "scripts.install_plugins:main"
-shreni = "shreni.sthapathi:main"
+shreni = "shreni.sthapathi:cli"
 
 [tool.setuptools.packages.find]
 include = ["scripts*", "shreni*"]

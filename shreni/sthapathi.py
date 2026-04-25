@@ -1,7 +1,10 @@
 """Sthapathi (स्थपति) — master orchestrator and CLI entry point.
 
-Run from a plain terminal OUTSIDE any Claude Code session:
-    python run.py --repo /path/to/repo [--project-name MyProject]
+Usage:
+    shreni init --repo /path/to/repo [--project-name MyProject]
+    shreni run  --repo /path/to/repo [--project-name MyProject]
+
+Run from a plain terminal OUTSIDE any Claude Code session.
 """
 
 import argparse
@@ -12,7 +15,7 @@ from pathlib import Path
 import anyio
 
 from .agents import parikshaka as parikshaka_agent
-from .agents import silpi as silpi_agent
+from .init import run_init
 from .bd import active_parent_ids, breakdown_state, claim_task, ensure_initialized, ready_tasks, tasks_with_label
 from .context import Context
 from .git import branch_exists, checkout, create_branch, current_branch, pull
@@ -173,15 +176,37 @@ async def main() -> None:
 
     # ── CLI args ──────────────────────────────────────────────────────────────
     parser = argparse.ArgumentParser(
-        description="Sthapathi — Silpi implements, Viharapala reviews, Parikshaka tests."
+        description="Sthapathi — autonomous development orchestrator.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Commands:\n"
+            "  init  Set up a new project (bd init, DoltHub backup, CLAUDE.md)\n"
+            "  run   Run the orchestrator against the project backlog (default)\n"
+        ),
     )
-    parser.add_argument("--repo", required=True, type=Path, help="Path to the git repository")
-    parser.add_argument(
-        "--project-name", default=None, help="Project name (defaults to repo dir name)"
-    )
+    subparsers = parser.add_subparsers(dest="command")
+
+    for cmd in ("init", "run"):
+        sub = subparsers.add_parser(cmd)
+        sub.add_argument("--repo", required=True, type=Path, help="Path to the git repository")
+        sub.add_argument("--project-name", default=None, help="Project name (defaults to repo dir name)")
+
+    # Back-compat: shreni --repo ... (no subcommand) → run
+    parser.add_argument("--repo", nargs="?", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--project-name", nargs="?", default=None, help=argparse.SUPPRESS)
+
     args = parser.parse_args()
 
-    repo_root = args.repo.resolve()
+    # Resolve repo and project name regardless of subcommand vs legacy form
+    repo_arg = args.repo
+    project_name_arg = args.project_name
+    command = args.command or "run"
+
+    if repo_arg is None:
+        parser.print_help()
+        sys.exit(1)
+
+    repo_root = repo_arg.resolve()
     if not repo_root.exists():
         print(f"ERROR: Repository does not exist: {repo_root}", file=sys.stderr)
         sys.exit(1)
@@ -191,22 +216,31 @@ async def main() -> None:
 
     ctx = Context(
         repo_root=repo_root,
-        project_name=args.project_name or repo_root.name,
+        project_name=project_name_arg or repo_root.name,
         agents_dir=_PROJECT_ROOT,
     )
 
+    # ── Route to subcommand ───────────────────────────────────────────────────
+    if command == "init":
+        await run_init(ctx)
+        return
+
+    # ── run ───────────────────────────────────────────────────────────────────
     log(f"Sthapathi started for '{ctx.project_name}' at {ctx.repo_root}")
     log("Agents: Silpi (implement) + Viharapala (review) + Parikshaka (QA, background)")
 
     ensure_initialized(ctx)
 
-    # ── Ensure CLAUDE.md exists and is complete ───────────────────────────────
-    claude_md = ctx.repo_root / "CLAUDE.md"
-    if not claude_md.exists():
-        log("CLAUDE.md not found — Silpi will create it now.")
-        await silpi_agent.init_project(ctx)
-    else:
-        log("CLAUDE.md found.")
+    # ── Guard: project must be initialised before running ────────────────────
+    if not (ctx.repo_root / "CLAUDE.md").exists():
+        print(
+            f"\nERROR: CLAUDE.md not found in {ctx.repo_root}\n"
+            f"Run project initialisation first:\n"
+            f"  shreni init --repo {ctx.repo_root}\n",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    log("CLAUDE.md found.")
 
     # ── Replay any tasks left in the persistent queue from a previous run ─────
     send_channel, recv_channel = anyio.create_memory_object_stream(max_buffer_size=1000)
@@ -223,3 +257,7 @@ async def main() -> None:
             await _main_loop(send_channel, ctx)
         finally:
             await send_channel.aclose()
+
+
+def cli() -> None:
+    anyio.run(main)
