@@ -6,10 +6,31 @@ from claude_agent_sdk import (
     ResultMessage,
     SdkPluginConfig,
     TextBlock,
+    ToolUseBlock,
     query,
 )
 
 from ..context import Context
+
+_TRUNCATE = 120
+
+
+def _tool_status(block: ToolUseBlock) -> str:
+    """Return a single-line status string for a tool call."""
+    name = block.name
+    inp = block.input or {}
+    if name == "Bash":
+        detail = inp.get("command", "")
+    elif name in ("Read", "Write", "Edit", "NotebookEdit"):
+        detail = inp.get("file_path", "")
+    elif name == "Agent":
+        detail = inp.get("description", "")
+    else:
+        detail = next(iter(inp.values()), "") if inp else ""
+    detail = str(detail).replace("\n", " ")
+    if len(detail) > _TRUNCATE:
+        detail = detail[:_TRUNCATE] + "…"
+    return f"  ⚙ {name}: {detail}\n" if detail else f"  ⚙ {name}\n"
 
 
 async def run_agent(
@@ -44,6 +65,9 @@ async def run_agent(
                 for block in message.content:
                     if isinstance(block, TextBlock):
                         f.write(block.text)
+                        f.flush()
+                    elif isinstance(block, ToolUseBlock):
+                        f.write(_tool_status(block))
                         f.flush()
             elif isinstance(message, ResultMessage):
                 if message.result:

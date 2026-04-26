@@ -40,10 +40,26 @@ all of them.
 
 ### Step 2 — Explore the codebase
 
-Find the relevant files before changing anything:
+Before grepping anything, check whether the knowledge graph is available:
 
 ```bash
-# Understand what already exists
+ls graphify-out/GRAPH_REPORT.md 2>/dev/null && cat graphify-out/GRAPH_REPORT.md
+```
+
+If the report exists, read it first. It identifies the god nodes (highest-dependency
+files) and community clusters — use it to locate the relevant area of the codebase
+before touching any files. This replaces broad grep sweeps with targeted reads.
+
+If the graph is not built yet, build it before exploring:
+
+```bash
+graphify build
+cat graphify-out/GRAPH_REPORT.md
+```
+
+Then find the relevant files:
+
+```bash
 grep -r "<keyword>" . --include="*.py" -l
 ```
 

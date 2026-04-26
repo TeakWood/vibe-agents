@@ -102,7 +102,7 @@ def _check_graphify_installed() -> None:
         print("  Machine setup required — install Graphify, then re-run:")
         print("  shreni init --repo <path>")
         print("━" * 56)
-        print("\n  pip install graphifyy && graphify install\n")
+        print("\n  pipx install graphifyy && graphify install\n")
         sys.exit(1)
     print("  ✓ graphify installed")
 
@@ -171,17 +171,18 @@ def _gitignore_beads(ctx: Context) -> None:
 
 
 def _run_graphify(ctx: Context) -> None:
-    """Build the initial knowledge graph and install git hooks for auto-rebuild."""
-    graphify_out = ctx.repo_root / "graphify-out"
-    if graphify_out.exists():
-        log("graphify-out/ exists — skipping initial graph build.")
-    else:
-        log("Building knowledge graph with graphify...")
-        subprocess.run(
-            ["graphify", ".", "--no-viz"],
-            check=True, cwd=ctx.repo_root,
-        )
-        log("Knowledge graph built → graphify-out/")
+    """Wire graphify into Claude Code and install git hooks for auto-rebuild.
+
+    The graph itself is built lazily the first time an agent runs /graphify.
+    This step configures the CLAUDE.md section + PreToolUse hook so agents
+    can use it, and installs git hooks so the graph stays current after commits.
+    """
+    log("Configuring graphify for Claude Code...")
+    subprocess.run(
+        ["graphify", "claude", "install"],
+        check=True, cwd=ctx.repo_root,
+    )
+    log("graphify Claude Code integration installed (CLAUDE.md + PreToolUse hook).")
 
     log("Installing graphify git hooks...")
     subprocess.run(

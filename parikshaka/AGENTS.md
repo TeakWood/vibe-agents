@@ -69,21 +69,40 @@ failure. If one exists, skip — do not create a duplicate.
 **b) If no open bug exists, create one:**
 
 ```bash
-bd create "<Test name>: <one-line failure summary>" \
+bd create "<Test name>: <one-line failure summary> on <browser>" \
   --type bug \
   --priority 1 \
   --labels parikshaka \
   --description "Parikshaka detected a regression after merging task <task_id>.
 
+## Browser
+<Chromium | Firefox | WebKit | All browsers>
+
 ## Failure
 <paste the relevant error output>
 
+## Pattern (if applicable)
+<If this matches a known pattern, name it:
+- Toast not visible — toast disappeared before assertion; see Known Failure Patterns in Silpi AGENTS.md
+- Page/context closed — navigation race; async work not cancelled before route change
+- waitForURL / goto timeout — navigation never completed; likely a Firefox load-event difference
+- Strict mode violation — selector matched multiple elements; duplicate visible text in DOM
+- Dialog state — dialog did not close or error did not appear after async operation>
+
 ## Reproduce
-Run: <e2e command>" \
+Run: <e2e command> --project=<browser>" \
   --json
 ```
 
 Create one bug per distinct failing test. Do not create a single catch-all bug.
+
+**c) Cross-browser toast failures:**
+
+When the same test fails with "toast not visible" across multiple browsers, create a
+single bug titled `"<Test name>: toast not visible (cross-browser)"` covering all
+affected browsers rather than one bug per browser. List each affected browser in the
+description. This is the most common recurring pattern — do not flood the backlog with
+near-identical tickets.
 
 ---
 
@@ -147,6 +166,36 @@ bd create "e2e: <user journey or feature name>" \
 ## Acceptance criteria
 - [ ] <specific behaviour that must pass>
 - [ ] <another assertion>
+
+## Browser requirements
+Tests MUST pass on Chromium, Firefox, and WebKit. Run with:
+  <e2e command> --project=chromium --project=firefox --project=webkit
+
+## Known failure patterns — apply these in every test written for this task
+
+**Toast assertions**
+- Never assert a toast immediately after the triggering action; always use waitFor
+  with a timeout of at least 4 000 ms
+- Assert the toast is visible, not just present in the DOM
+- Example: await expect(page.getByText('Success')).toBeVisible({ timeout: 4000 })
+
+**Async sequencing**
+- After any action that triggers a server call (form submit, button click), wait for
+  a network response or a stable DOM signal before asserting UI state
+- Do not assert dialog-closed or page-navigated immediately after a click; wait for
+  the transition to complete
+
+**Firefox-specific**
+- Drag-and-drop: use dispatchEvent with a fully populated dataTransfer object;
+  simple dragTo() calls are unreliable on Firefox
+- Streaming / AI chat: after triggering a streamed response, poll for non-empty
+  content rather than asserting in a single check
+- Navigation: prefer waitUntil: 'domcontentloaded' over the default 'load' when
+  calling goto() in Firefox-heavy flows
+
+**Parallel safety**
+- All test data (users, records, config) must be created fresh per test worker;
+  never read or mutate shared fixtures that another worker may be writing
 
 ## Framework
 <e2e framework in use, e.g. Playwright, Cypress, pytest-playwright>
