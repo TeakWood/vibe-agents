@@ -170,6 +170,31 @@ def _gitignore_beads(ctx: Context) -> None:
         log(".beads/ removed from git index and committed.")
 
 
+def _create_parikshaka_ignore(ctx: Context) -> None:
+    """Create .parikshaka-ignore in the target repo if it does not exist.
+
+    The file lets teams suppress deliberate test skips from Parikshaka's
+    bug and coverage task creation. Each line is a substring/glob pattern
+    matched against the full test name; lines starting with # are comments.
+    """
+    ignore_file = ctx.repo_root / ".parikshaka-ignore"
+    if ignore_file.exists():
+        log(".parikshaka-ignore already exists — skipping.")
+        return
+    ignore_file.write_text(
+        "# .parikshaka-ignore — tests listed here are deliberately skipped.\n"
+        "# Parikshaka will not create bug or e2e tasks for matching tests.\n"
+        "#\n"
+        "# One pattern per line. Supports * as a wildcard.\n"
+        "# Pattern is matched as a substring of the full test name.\n"
+        "#\n"
+        "# Examples:\n"
+        "#   smoke: homepage is reachable\n"
+        "#   Admin — Users panel: *\n"
+    )
+    log(".parikshaka-ignore created (empty template).")
+
+
 def _run_graphify(ctx: Context) -> None:
     """Wire graphify into Claude Code and install git hooks for auto-rebuild.
 
@@ -303,6 +328,9 @@ async def run_init(ctx: Context) -> None:
     log_file.parent.mkdir(parents=True, exist_ok=True)
     install_backup(ctx.repo_root, log_file)
     log(f"bd backup cron installed (every 5 min). Log → {log_file}")
+
+    # ── Parikshaka ignore list ────────────────────────────────────────────────
+    _create_parikshaka_ignore(ctx)
 
     # ── Graphify knowledge graph ──────────────────────────────────────────────
     _run_graphify(ctx)

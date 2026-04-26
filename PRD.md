@@ -81,6 +81,15 @@ The human remains in the loop for decisions that require judgment: approving epi
 - Silpi picks up the task, writes the e2e tests, and submits them for Viharapala review.
 - The tests land on `main` through the normal implement → review → merge cycle.
 
+### Suppressing deliberate test skips
+
+> As a developer, I want to mark certain tests as intentionally skipped so Parikshaka does not create bug or coverage tasks for them.
+
+- The developer adds test name patterns to `.parikshaka-ignore` in the project root.
+- `shreni init` creates the file automatically with a commented template.
+- Parikshaka reads the file before processing any suite output and ignores all matching tests silently.
+- Patterns support `*` as a wildcard and are matched as substrings of the full test name.
+
 ### Crash recovery
 
 > As a developer, I want the system to resume where it left off if it crashes or is restarted.
@@ -120,6 +129,8 @@ The human remains in the loop for decisions that require judgment: approving epi
 | F12 | Parikshaka must discover the e2e command from CLAUDE.md, package.json, pyproject.toml, or Makefile. If none is found, it must skip the check and log the reason. |
 | F13 | On e2e failure, Parikshaka must create a `bd` bug task (`type=bug, priority=1, label=parikshaka`) for each distinct failing test, unless an open bug with the same title already exists. |
 | F14 | Parikshaka must create a `bd` feature task (`type=feature, label=e2e`) for any user-facing behaviour introduced by the merged task that is not already covered by an existing e2e test. It must not create duplicate coverage tasks. |
+| F23 | Parikshaka must read `.parikshaka-ignore` before processing any suite output. Tests whose full name matches a pattern in the file must be silently skipped — no bug or coverage task is created for them. Patterns support `*` as a wildcard and substring matching. Lines starting with `#` are comments. |
+| F24 | `shreni init` must create `.parikshaka-ignore` in the target repo if it does not already exist, pre-populated with a commented template explaining the format. |
 | F15 | Silpi must recognise `label=e2e` tasks and follow the e2e test authoring flow: write tests, run the suite, commit only test files, submit for review. |
 | F16 | `shreni init` must create or update `CLAUDE.md` using Silpi, capturing build, test, lint, dev server, env vars, key directories, coding conventions, and issue tracker rules (including the `manual`/`parikshaka`/`e2e` label conventions and task creation order). `shreni run` must exit with an error if `CLAUDE.md` is absent. |
 | F17 | On crash or restart, Sthapathi must resume in-progress work without re-implementing already-completed steps. |

@@ -145,7 +145,9 @@ The `User:` value from `dolt creds check` is parsed and used as the DoltHub user
 | 4 | `bd dolt remote add origin https://doltremoteapi.dolthub.com/<user>/<prefix>-beads` |
 | 5 | `cd .beads/embeddeddolt/<prefix> && dolt push origin main` (direct dolt — bypasses `bd dolt push` port bug) |
 | 6 | Install backup cron: `*/5 * * * * cd .beads/embeddeddolt/<prefix> && dolt push origin main` |
-| 7 | Run Silpi to create `CLAUDE.md` |
+| 7 | Create `.parikshaka-ignore` in the target repo with a commented template (skipped if the file already exists) |
+| 8 | Run graphify: `graphify claude install` + `graphify hook install` |
+| 9 | Run Silpi to create `CLAUDE.md` |
 
 **Key constraints learned from production use:**
 - `git-push: false` prevents beads backup commits racing with agent commits on `main`
@@ -325,11 +327,22 @@ Three JSON files under `<repo>/.claude/`:
 
 Parikshaka is an examiner, not an implementer. After each merge it:
 
-1. **Runs the existing e2e suite** — discovers the command from CLAUDE.md / package.json / pyproject.toml / Makefile
-2. **Reports regressions** — creates `type=bug, label=parikshaka, priority=1` tasks for each failing test (deduplicates against open bugs)
-3. **Identifies coverage gaps** — creates `type=feature, label=e2e` tasks describing the missing user journey (only for user-visible behaviour: new pages, forms, API endpoints, user-facing bug fixes)
+1. **Reads the ignore list** — loads `.parikshaka-ignore` from the project root if it exists. Any test whose full name matches a pattern is silently excluded from all subsequent steps. Patterns are substring or glob matches; `*` is the wildcard; lines starting with `#` are comments.
+2. **Runs the existing e2e suite** — discovers the command from CLAUDE.md / package.json / pyproject.toml / Makefile
+3. **Reports regressions** — creates `type=bug, label=parikshaka, priority=1` tasks for each failing test not in the ignore list (deduplicates against open bugs). Cross-browser toast failures are consolidated into a single task rather than one per browser.
+4. **Identifies coverage gaps** — creates `type=feature, label=e2e` tasks describing the missing user journey (only for user-visible behaviour: new pages, forms, API endpoints, user-facing bug fixes). Ignored tests are not counted as coverage gaps.
 
 Silpi picks up `e2e`-labelled tasks and writes the tests; they go through the normal Viharapala review cycle.
+
+### `.parikshaka-ignore` format
+
+```
+# Lines starting with # are comments
+smoke: homepage is reachable          # exact substring match
+Admin — Users panel: *               # glob — suppresses all tests in this group
+```
+
+`shreni init` creates this file automatically with a commented template if it does not already exist.
 
 **Coverage decision table:**
 

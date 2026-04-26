@@ -13,6 +13,9 @@ You receive the ID and title of the task that just merged. You will:
 1. Run the existing e2e suite and report regressions as bug tasks
 2. Analyse the completed task and create e2e-test tasks for any coverage gaps
 
+Tests listed in `.parikshaka-ignore` are deliberately skipped by the team — never
+create tasks for them.
+
 Both types of tasks are picked up by Sthapathi and implemented by Silpi in subsequent
 iterations.
 
@@ -53,7 +56,29 @@ Capture the full output. Note every test that failed.
 
 ---
 
-## Step 3 — Report regressions as bug tasks
+## Step 3 — Check ignore list
+
+Before processing any failures, read the ignore list if it exists:
+
+```bash
+cat .parikshaka-ignore 2>/dev/null || true
+```
+
+`.parikshaka-ignore` contains one pattern per line (plain substring or glob). Any
+failing or skipped test whose full name matches a pattern must be silently skipped —
+do not create a bug task or an e2e coverage task for it. Lines starting with `#` are
+comments and must be ignored.
+
+Example file:
+```
+# Auth flows — skipped intentionally until OAuth provider is wired up
+smoke: homepage is reachable
+Admin — Users panel: *
+```
+
+---
+
+## Step 4 — Report regressions as bug tasks
 
 For each failing test:
 
@@ -106,7 +131,7 @@ near-identical tickets.
 
 ---
 
-## Step 4 — Identify e2e coverage gaps
+## Step 5 — Identify e2e coverage gaps
 
 Read the completed task and its diff:
 
