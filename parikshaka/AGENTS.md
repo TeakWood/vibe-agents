@@ -91,6 +91,92 @@ bd list --json
 Filter for tasks with `type=bug`, `status` not `closed`, and a title matching this
 failure. If one exists, skip — do not create a duplicate.
 
+**a2) Check for a recurring pattern (closed bugs that keep coming back):**
+
+Before creating a new bug, look for past bugs that already addressed this same
+failure. The same test failing again after a prior fix is a *pattern problem*, not
+a fresh bug — opening another ticket only buries the signal.
+
+```bash
+# Past bugs against this test name (open + closed)
+bd list --type bug --json | jq '[.[] | select(.title | contains("<test name>"))]'
+
+# Cross-check semantically similar past bugs (different wording, same failure)
+bd find-duplicates --status all --threshold 0.4 --json
+```
+
+Treat the failure as **recurring** if any of these are true:
+- 2+ closed bugs already exist with the same test name (this would be the 3rd+ occurrence)
+- 2+ closed bugs exist whose `## Pattern` block names the same pattern as this failure
+  (toast not visible, page/context closed, Firefox navigation, strict-mode violation, etc.)
+- A closed bug for this exact test was closed within the last 5 merged tasks
+
+If recurring, **do not create a new bug**. Skip to Step 4a3 to open an investigation
+task instead.
+
+**a3) Create an investigation task for recurring patterns:**
+
+First check that an open investigation task does not already exist for this pattern:
+
+```bash
+bd list --json | jq '[.[] | select(.labels[]? == "investigation" and (.status != "closed"))]'
+```
+
+If one exists and covers this pattern, append the new bug evidence as a comment
+(`bd comment <investigation-id> "<new failure details>"`) and stop — do not create
+a duplicate investigation.
+
+If none exists, create one:
+
+```bash
+bd create "Investigate recurring pattern: <pattern name> in <test name or area>" \
+  --type feature \
+  --priority 1 \
+  --labels investigation \
+  --description "Parikshaka detected this failure pattern recurring across multiple
+merged tasks. A direct re-fix has not held — this task asks Silpi to study the
+prior fixes, identify what works across browsers, and capture durable rules as
+bd memories so future implementations avoid the regression.
+
+## Pattern
+<one-line pattern name — toast not visible, page/context closed,
+Firefox navigation, strict-mode violation, async sequencing, etc.>
+
+## Related bugs (chronological)
+- BD-X — <title> — closed by T-A — <commit sha if known>
+- BD-Y — <title> — closed by T-B — <commit sha if known>
+- BD-Z — <title> — <open | closed by T-C>
+
+## Failure observed in this run
+<paste the relevant error output>
+
+## Browsers affected
+<Chromium | Firefox | WebKit | All browsers>
+
+## Investigation goals (for Silpi)
+1. Read each related bug and the diff that closed it
+   (bd show <id>; git log --all --grep '<id>'; git show <sha>).
+2. Compare the fix attempts: what held across browsers, what regressed, what
+   only papered over the symptom.
+3. Identify the durable rule(s) — concrete coding patterns that will prevent
+   this failure in future tasks.
+4. Capture each rule as a bd memory using bd remember with a stable --key:
+     bd remember \"<rule>\" --key <pattern-slug>-<browser-or-aspect>
+   Memories must be specific enough to apply during implementation (selector,
+   timeout, waitFor pattern, dataTransfer setup, etc.) — not generic advice.
+5. Re-fix the underlying issue if a clean fix is now apparent. Otherwise leave
+   code unchanged and let the captured memories guide the next implementation.
+
+## Output
+- One or more bd memories created via bd remember
+- A comment on this task summarising the findings and listing the memory keys
+- Production code changed only if the investigation reveals a clear fix" \
+  --json
+```
+
+Open investigation tasks block the bug from re-recurring; do not also open a
+sibling bug for the same failure.
+
 **b) If no open bug exists, create one:**
 
 ```bash
@@ -239,4 +325,6 @@ files to follow.
 - **Never write or modify code** — your output is bd tasks only
 - **Never create duplicate tasks** — always check before creating
 - Use `--json` flag on all bd commands
-- `parikshaka` label = regression bug; `e2e` label = coverage task
+- `parikshaka` label = regression bug; `e2e` label = coverage task;
+  `investigation` label = recurring-pattern task (created in place of a
+  duplicate-feeling bug, see Step 4 a2/a3)

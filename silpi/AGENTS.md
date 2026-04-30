@@ -22,6 +22,10 @@ bd show <id> --json
 If the task has the label **`e2e`**, follow the [E2e Test Tasks](#e2e-test-tasks) flow
 instead of the standard Implementation Loop below.
 
+If the task has the label **`investigation`**, follow the
+[Investigation Tasks](#investigation-tasks) flow — your output is `bd remember`
+memories, not production code.
+
 ---
 
 ## Implementation Loop
@@ -37,6 +41,12 @@ bd comments <id>
 
 Identify every acceptance criterion. Do not begin coding until you understand
 all of them.
+
+Re-read any `bd memories` that were pre-loaded at the top of your prompt. Those
+memories were captured from past investigation tasks and encode rules that have
+already burned the project once — apply them throughout the implementation.
+If the prompt did not include memories, run `bd memories` yourself and skim the
+output before coding.
 
 ### Step 2 — Explore the codebase
 
@@ -212,6 +222,107 @@ Commit only the new test files:
 
 ```bash
 bd set-state <id> review=ready-for-review --reason "e2e tests written and passing" --json
+```
+
+---
+
+## Investigation Tasks
+
+When a task has the label **`investigation`**, Parikshaka created it because the
+same failure pattern has recurred across multiple merged tasks. Past fixes did
+not hold. Your job is to study what was tried, identify what works across
+browsers, and codify durable rules as `bd remember` memories so future
+implementations stop re-introducing the regression.
+
+You are **not writing production code by default** for an investigation task.
+Only touch source if the analysis reveals a clear, surgical fix — and even
+then, the memories are the primary deliverable.
+
+### Step 1 — Read the task and its prior art
+
+```bash
+bd show <id> --json
+bd comments <id>
+```
+
+The description lists the related bug IDs and the pattern name. Read every
+related bug and its closing commit:
+
+```bash
+for bug in BD-X BD-Y BD-Z; do
+  bd show "$bug"
+  # Find the task that closed it and inspect that diff:
+  git log --all --oneline --grep "$bug"
+  git show <sha-from-above>
+done
+```
+
+Also pull existing memories on this pattern so you do not duplicate them:
+
+```bash
+bd memories <pattern keyword>
+```
+
+### Step 2 — Compare fix attempts across browsers
+
+For each prior fix, write down (in scratch):
+- What it changed (selector, timeout, waitFor, dataTransfer, navigation guard)
+- Which browsers it held on (Chromium, Firefox, WebKit)
+- Why it later regressed — was it overridden, deleted, or wrong from the start
+
+The goal is to separate **patterns that worked** from **patterns that only
+masked the symptom**.
+
+### Step 3 — Capture durable rules as bd memories
+
+For every rule that is concrete enough to apply during implementation, run:
+
+```bash
+bd remember "<specific rule with the actual selector / timeout / API>" \
+  --key <pattern-slug>-<aspect>
+```
+
+Use stable, descriptive keys (e.g. `toast-visibility-timeout`,
+`firefox-dragdrop-datatransfer`, `dialog-close-await-server`) so re-running the
+investigation overwrites stale memories instead of stacking duplicates.
+
+Memories must be **actionable**, not generic. Bad: `"watch out for toast
+visibility issues"`. Good: `"toast assertions: await
+expect(getByText(...)).toBeVisible({ timeout: 4000 }) — toast must remain
+visible ≥4 s; never assert immediately after the trigger"`.
+
+### Step 4 — Apply the fix only if it is now obvious
+
+If the comparison reveals a clean root-cause fix (e.g. one helper everywhere is
+wrong, or a single waitFor is missing), apply it, write a regression test if
+feasible, and commit:
+
+```
+<id>: Fix recurring <pattern> across browsers
+```
+
+Otherwise commit nothing — the captured memories carry the value forward.
+
+### Step 5 — Summarise on the task
+
+Add a comment listing the memory keys you created and the conclusions of the
+analysis:
+
+```bash
+bd comment <id> "## Investigation summary
+
+### Memories captured
+- <key-1> — <one-line gist>
+- <key-2> — <one-line gist>
+
+### Conclusion
+<which patterns held cross-browser, which masked symptoms, what to do next>"
+```
+
+### Step 6 — Submit for review
+
+```bash
+bd set-state <id> review=ready-for-review --reason "Investigation complete; memories captured" --json
 ```
 
 ---

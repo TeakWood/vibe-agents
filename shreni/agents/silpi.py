@@ -6,8 +6,31 @@ from claude_agent_sdk import SdkPluginConfig
 
 from ..context import Context
 from ..plugins import resolve_plugin
-from ..shell import log
+from ..shell import log, run_cmd_output
 from .runner import load_agent_prompt, run_agent
+
+
+_MEMORIES_HEADER = (
+    "## bd memories — durable rules from past investigations\n"
+    "These were captured by prior `investigation` tasks. Treat them as binding"
+    " constraints, not suggestions; they exist because the project already"
+    " regressed on each rule at least once.\n\n"
+)
+
+
+def _bd_memories(ctx: Context) -> str:
+    """Fetch `bd memories` for injection into Silpi's prompt.
+
+    Returns an empty string when bd is unavailable or no memories are stored,
+    so the prompt template can include this block unconditionally.
+    """
+    try:
+        out = run_cmd_output(["bd", "memories"], ctx.repo_root)
+    except Exception:
+        return ""
+    if not out or "no beads database" in out.lower() or "no memories" in out.lower():
+        return ""
+    return _MEMORIES_HEADER + out + "\n\n"
 
 
 def _load_plugins() -> list[SdkPluginConfig]:
@@ -92,6 +115,7 @@ async def implement(task_id: str, task_context: str, branch: str, ctx: Context) 
         load_agent_prompt("silpi", ctx),
         (
             f"You are Silpi, working on task {task_id} on branch '{branch}'.\n\n"
+            f"{_bd_memories(ctx)}"
             f"## Task\n{task_context}\n\n"
             f"## Instructions\n"
             f"1. Read the task. If it involves any UI, frontend components, pages, or"
@@ -128,6 +152,7 @@ async def address_feedback(
         (
             f"You are Silpi, addressing review feedback on task {task_id}"
             f" on branch '{branch}'.\n\n"
+            f"{_bd_memories(ctx)}"
             f"## Task\n{task_context}\n\n"
             f"## Review comments — fix ALL blocking issues\n{review_comments}\n\n"
             f"## Instructions\n"
