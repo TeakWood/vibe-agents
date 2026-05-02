@@ -36,6 +36,11 @@ from .workflow.task_loop import run_task_loop
 # Project root: the directory containing silpi/, viharapala/, parikshaka/, run.py
 _PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 
+# Toggle to re-enable Parikshaka. When False, merged tasks are still appended
+# to the persistent queue file so they can be processed later, but the
+# background worker is not started.
+_PARIKSHAKA_ENABLED = False
+
 _parikshaka = make_logger("Parikshaka")
 
 
@@ -80,7 +85,8 @@ async def _main_loop(
         merged = await run_task_loop(resume_task, resume_branch, resume_round, resume_state, ctx)
         if merged:
             enqueue_parikshaka(merged, ctx)
-            await parikshaka_send.send((merged["id"], merged.get("title", "")))
+            if _PARIKSHAKA_ENABLED:
+                await parikshaka_send.send((merged["id"], merged.get("title", "")))
 
     # ── Main loop ─────────────────────────────────────────────────────────────
     while True:
@@ -126,7 +132,8 @@ async def _main_loop(
                 merged = await run_task_loop(task, branch, 1, "merge", ctx)
                 if merged:
                     enqueue_parikshaka(merged, ctx)
-                    await parikshaka_send.send((merged["id"], merged.get("title", "")))
+                    if _PARIKSHAKA_ENABLED:
+                        await parikshaka_send.send((merged["id"], merged.get("title", "")))
             continue
 
         # 1. Pick the next ready task — prefer tasks sharing a parent with in-progress work
@@ -162,7 +169,8 @@ async def _main_loop(
         merged = await run_task_loop(task, branch, 1, "silpi_implement", ctx)
         if merged:
             enqueue_parikshaka(merged, ctx)
-            await parikshaka_send.send((merged["id"], merged.get("title", "")))
+            if _PARIKSHAKA_ENABLED:
+                await parikshaka_send.send((merged["id"], merged.get("title", "")))
 
 
 async def main() -> None:
@@ -228,7 +236,10 @@ async def main() -> None:
 
     # ── run ───────────────────────────────────────────────────────────────────
     log(f"Sthapathi started for '{ctx.project_name}' at {ctx.repo_root}")
-    log("Agents: Silpi (implement) + Viharapala (review) + Parikshaka (QA, background)")
+    if _PARIKSHAKA_ENABLED:
+        log("Agents: Silpi (implement) + Viharapala (review) + Parikshaka (QA, background)")
+    else:
+        log("Agents: Silpi (implement) + Viharapala (review) — Parikshaka disabled")
     start_log_session(ctx)
 
     ensure_initialized(ctx)
@@ -246,15 +257,17 @@ async def main() -> None:
 
     # ── Replay any tasks left in the persistent queue from a previous run ─────
     send_channel, recv_channel = anyio.create_memory_object_stream(max_buffer_size=1000)
-    pending = load_parikshaka_queue(ctx)
-    if pending:
-        log(f"Replaying {len(pending)} task(s) left in Parikshaka queue from previous run.")
-        for entry in pending:
-            await send_channel.send((entry["id"], entry["title"]))
+    if _PARIKSHAKA_ENABLED:
+        pending = load_parikshaka_queue(ctx)
+        if pending:
+            log(f"Replaying {len(pending)} task(s) left in Parikshaka queue from previous run.")
+            for entry in pending:
+                await send_channel.send((entry["id"], entry["title"]))
 
     # ── Run main loop and Parikshaka worker in parallel ───────────────────────
     async with anyio.create_task_group() as tg:
-        tg.start_soon(_parikshaka_worker, recv_channel, ctx)
+        if _PARIKSHAKA_ENABLED:
+            tg.start_soon(_parikshaka_worker, recv_channel, ctx)
         try:
             await _main_loop(send_channel, ctx)
         finally:
