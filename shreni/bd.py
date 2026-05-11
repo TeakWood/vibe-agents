@@ -24,6 +24,11 @@ def review_state(task_id: str, ctx: Context) -> str:
     return out.strip('"')
 
 
+def task_status(task_id: str, ctx: Context) -> str:
+    out = run_cmd_output(["bd", "state", task_id, "status"], ctx.repo_root)
+    return out.strip('"')
+
+
 def breakdown_state(epic_id: str, ctx: Context) -> str:
     out = run_cmd_output(["bd", "state", epic_id, "breakdown"], ctx.repo_root)
     return out.strip('"')

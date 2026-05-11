@@ -109,6 +109,19 @@ def _check_graphify_installed() -> None:
 
 # ── Phase 2: Per-project setup ────────────────────────────────────────────────
 
+def _ensure_observability_dir(ctx: Context) -> None:
+    """Create the per-project observability tree under ~/.shreni/.
+
+    Layout:
+      ~/.shreni/projects/<slug>/
+        tasks/                ← per-task spans + agent logs land here at runtime
+    """
+    obs_dir = ctx.project_obs_dir
+    obs_dir.mkdir(parents=True, exist_ok=True)
+    (obs_dir / "tasks").mkdir(exist_ok=True)
+    log(f"Observability dir ready: {obs_dir}")
+
+
 def _bd_prefix(project_name: str) -> str:
     """Derive the bd issue prefix from the project name (lowercase slug)."""
     return re.sub(r"[^a-z0-9]", "-", project_name.lower()).strip("-")
@@ -316,6 +329,7 @@ async def run_init(ctx: Context) -> None:
     github_username = _check_gh_installed()
 
     # ── Phase 2: Per-project setup ────────────────────────────────────────────
+    _ensure_observability_dir(ctx)
     prefix = _ensure_bd_initialized(ctx)
     _gitignore_beads(ctx)
     _configure_beads_backup(ctx)
@@ -348,5 +362,6 @@ async def run_init(ctx: Context) -> None:
     log(f"Project '{ctx.project_name}' is ready.")
     log(f"  Issues backup: github.com/{github_username}/{issues_repo}")
     log(f"  Backup log: {log_file}")
+    log(f"  Observability: {ctx.project_obs_dir}")
     log(f"  Run: shreni run --repo {ctx.repo_root}")
     log("━" * 50)

@@ -16,9 +16,30 @@ import anyio
 
 from .agents import parikshaka as parikshaka_agent
 from .init import run_init
-from .bd import active_parent_ids, breakdown_state, claim_task, ensure_initialized, ready_tasks, tasks_with_label
+from .bd import (
+    active_parent_ids,
+    breakdown_state,
+    claim_task,
+    close_task,
+    ensure_initialized,
+    ready_tasks,
+    set_state,
+    task_status,
+    tasks_with_label,
+)
 from .context import Context
-from .git import branch_exists, checkout, create_branch, current_branch, pull
+from .observability import emit_event, span
+from .git import (
+    branch_exists,
+    branch_has_commits,
+    checkout,
+    create_branch,
+    current_branch,
+    pull,
+    stash_pop,
+    stash_save,
+    task_merged_to_main,
+)
 from .shell import log, make_logger, slugify
 from .state import (
     clear_epic,
@@ -52,8 +73,14 @@ async def _parikshaka_worker(
     async with recv:
         async for task_id, task_title in recv:
             _parikshaka(f"Quality check for {task_id} ('{task_title}')...")
-            await parikshaka_agent.quality_check(task_id, task_title, ctx)
-            dequeue_parikshaka(task_id, ctx)
+            with span(
+                ctx,
+                "parikshaka.background_check",
+                task_id=task_id,
+                attrs={"title": task_title},
+            ):
+                await parikshaka_agent.quality_check(task_id, task_title, ctx)
+                dequeue_parikshaka(task_id, ctx)
             _parikshaka(f"Quality check complete for {task_id}.")
 
 
@@ -76,12 +103,18 @@ async def _main_loop(
         log(f"Resuming task {resume_task['id']} (state={resume_state}, round={resume_round}).")
         cur = current_branch(ctx)
         if cur != resume_branch:
+            stashed = stash_save("shreni: pre-resume checkout", ctx)
             if branch_exists(resume_branch, ctx):
                 checkout(resume_branch, ctx)
             else:
                 checkout("main", ctx)
                 pull(ctx)
                 create_branch(resume_branch, ctx)
+            if stashed:
+                try:
+                    stash_pop(ctx)
+                except Exception as e:
+                    log(f"Warning: could not restore pre-resume stash automatically ({e}). Run `git stash pop` to recover.")
         merged = await run_task_loop(resume_task, resume_branch, resume_round, resume_state, ctx)
         if merged:
             enqueue_parikshaka(merged, ctx)
@@ -93,7 +126,7 @@ async def _main_loop(
         # 0a. Epics awaiting author sign-off — pause and prompt the user
         pending_epics = [
             t for t in tasks_with_label("review:viharapala-approved", ctx)
-            if t.get("type") == "epic"
+            if t.get("issue_type") == "epic"
         ]
         if pending_epics:
             log("━" * 40)
@@ -112,7 +145,7 @@ async def _main_loop(
         # 0b. Break down author-approved epics
         approved_epics = [
             t for t in tasks_with_label("review:approved", ctx)
-            if t.get("type") == "epic" and breakdown_state(t["id"], ctx) != "complete"
+            if t.get("issue_type") == "epic" and breakdown_state(t["id"], ctx) != "complete"
         ]
         if approved_epics:
             for epic in approved_epics:
@@ -120,14 +153,53 @@ async def _main_loop(
             continue
 
         # 0c. Merge tasks that Viharapala already approved (not yet closed)
+        # Filter out tasks already marked status=blocked — they were released
+        # by a prior iteration (e.g. stale approval on an empty branch) and
+        # are awaiting human attention; re-entering would loop forever.
         approved_tasks = [
             t for t in tasks_with_label("review:approved", ctx)
-            if t.get("type") != "epic"
+            if t.get("issue_type") != "epic" and task_status(t["id"], ctx) != "blocked"
         ]
         if approved_tasks:
             for task in approved_tasks:
+                task_id = task["id"]
                 branch = f"feature/{slugify(task['title'])}"
-                log(f"Picking up approved task {task['id']}: {task['title']}")
+
+                # Already merged — bd close must have failed previously. Close
+                # cleanly without re-entering the implement/review/merge loop.
+                if task_merged_to_main(task_id, ctx):
+                    log(f"Task {task_id} already merged to main — closing.")
+                    close_task(task_id, "Already merged to main", ctx)
+                    continue
+
+                # Approved but the branch has no commits ahead of main and the
+                # task is not in main. This is a confused state (stale
+                # approval, abandoned work, or a human-only task wrongly
+                # marked approved). Block for human review rather than
+                # dispatching to merge — task_loop would re-implement and the
+                # stale 'approved' label would trap us in a Silpi/Viharapala
+                # loop on every subsequent run.
+                if not branch_has_commits(branch, ctx):
+                    log(
+                        f"Task {task_id} has label review:approved but branch "
+                        f"{branch} has no commits ahead of main — marking "
+                        f"status=blocked for human review."
+                    )
+                    set_state(
+                        task_id,
+                        "status=blocked",
+                        "Stale approval: branch is empty and task not in main",
+                        ctx,
+                    )
+                    continue
+
+                log(f"Picking up approved task {task_id}: {task['title']}")
+                emit_event(
+                    ctx,
+                    "task_picked_up",
+                    task_id=task_id,
+                    attrs={"title": task["title"], "branch": branch, "via": "approved-resume"},
+                )
                 save_task(task, branch, ctx)
                 merged = await run_task_loop(task, branch, 1, "merge", ctx)
                 if merged:
@@ -158,11 +230,23 @@ async def _main_loop(
         # 2. Claim and create feature branch
         claim_task(task_id, ctx)
         log(f"Claimed {task_id}.")
+        emit_event(
+            ctx,
+            "task_picked_up",
+            task_id=task_id,
+            attrs={"title": task["title"], "branch": branch, "via": "ready-queue"},
+        )
         save_task(task, branch, ctx)
 
+        stashed = stash_save(f"shreni: pre-task {task_id}", ctx)
         checkout("main", ctx)
         pull(ctx)
         create_branch(branch, ctx)
+        if stashed:
+            try:
+                stash_pop(ctx)
+            except Exception as e:
+                log(f"Warning: could not restore pre-task stash automatically ({e}). Run `git stash pop` to recover.")
         log(f"Branch: {branch}")
 
         # 3. Run the implement → review → merge loop
@@ -191,6 +275,7 @@ async def main() -> None:
             "Commands:\n"
             "  init  Set up a new project (bd init, DoltHub backup, CLAUDE.md)\n"
             "  run   Run the orchestrator against the project backlog (default)\n"
+            "  logs  Inspect per-task spans/events under ~/.shreni/projects/<slug>/\n"
         ),
     )
     subparsers = parser.add_subparsers(dest="command")
@@ -199,6 +284,12 @@ async def main() -> None:
         sub = subparsers.add_parser(cmd)
         sub.add_argument("--repo", required=True, type=Path, help="Path to the git repository")
         sub.add_argument("--project-name", default=None, help="Project name (defaults to repo dir name)")
+
+    logs_sub = subparsers.add_parser("logs", help="Inspect per-task spans/events.")
+    logs_sub.add_argument("--repo", required=True, type=Path, help="Path to the git repository")
+    logs_sub.add_argument("--project-name", default=None, help="Project name (defaults to repo dir name)")
+    logs_sub.add_argument("--task", default=None, help="Task id to dump (omit to list tasks)")
+    logs_sub.add_argument("--raw", action="store_true", help="Print raw JSONL instead of a formatted timeline")
 
     # Back-compat: shreni --repo ... (no subcommand) → run
     parser.add_argument("--repo", nargs="?", type=Path, help=argparse.SUPPRESS)
@@ -234,6 +325,10 @@ async def main() -> None:
         await run_init(ctx)
         return
 
+    if command == "logs":
+        from .cli.logs import run_logs
+        sys.exit(run_logs(ctx, task=getattr(args, "task", None), raw=getattr(args, "raw", False)))
+
     # ── run ───────────────────────────────────────────────────────────────────
     log(f"Sthapathi started for '{ctx.project_name}' at {ctx.repo_root}")
     if _PARIKSHAKA_ENABLED:
@@ -265,13 +360,22 @@ async def main() -> None:
                 await send_channel.send((entry["id"], entry["title"]))
 
     # ── Run main loop and Parikshaka worker in parallel ───────────────────────
-    async with anyio.create_task_group() as tg:
-        if _PARIKSHAKA_ENABLED:
-            tg.start_soon(_parikshaka_worker, recv_channel, ctx)
-        try:
-            await _main_loop(send_channel, ctx)
-        finally:
-            await send_channel.aclose()
+    with span(
+        ctx,
+        "session",
+        attrs={
+            "project": ctx.project_name,
+            "repo_root": str(ctx.repo_root),
+            "parikshaka_enabled": _PARIKSHAKA_ENABLED,
+        },
+    ):
+        async with anyio.create_task_group() as tg:
+            if _PARIKSHAKA_ENABLED:
+                tg.start_soon(_parikshaka_worker, recv_channel, ctx)
+            try:
+                await _main_loop(send_channel, ctx)
+            finally:
+                await send_channel.aclose()
 
 
 def cli() -> None:

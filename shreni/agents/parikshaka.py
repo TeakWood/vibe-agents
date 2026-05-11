@@ -28,4 +28,6 @@ async def quality_check(task_id: str, task_title: str, ctx: Context) -> None:
         ),
         ctx,
         agent_name="parikshaka",
+        task_id=task_id,
+        span_name="parikshaka.quality_check",
     )

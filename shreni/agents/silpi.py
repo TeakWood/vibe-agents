@@ -105,6 +105,7 @@ async def init_project(ctx: Context) -> None:
         ),
         ctx,
         agent_name="silpi",
+        span_name="silpi.init_project",
         plugins=_PLUGINS,
     )
 
@@ -134,6 +135,8 @@ async def implement(task_id: str, task_context: str, branch: str, ctx: Context) 
         ),
         ctx,
         agent_name="silpi",
+        task_id=task_id,
+        span_name="silpi.implement",
         plugins=_PLUGINS,
     )
 
@@ -169,6 +172,8 @@ async def address_feedback(
         ),
         ctx,
         agent_name="silpi",
+        task_id=task_id,
+        span_name=f"silpi.address_feedback.round_{round_num}",
         plugins=_PLUGINS,
     )
 
@@ -195,5 +200,7 @@ async def breakdown_epic(
         ),
         ctx,
         agent_name="silpi",
+        task_id=epic_id,
+        span_name="silpi.breakdown_epic",
         plugins=_PLUGINS,
     )

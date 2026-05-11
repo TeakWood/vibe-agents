@@ -11,12 +11,14 @@ Shreni is an autonomous multi-agent coding system built on the Claude Agent SDK.
 ```
 shreni init --repo /path/to/repo [--project-name MyProject]
 shreni run  --repo /path/to/repo [--project-name MyProject]
+shreni logs --repo /path/to/repo [--task <id>] [--raw]
 ```
 
 | Command | Purpose |
 |---------|---------|
-| `init` | One-time project setup: prerequisites check, bd init, DoltHub backup, CLAUDE.md |
-| `run` | Run the orchestrator against the task backlog; requires init to have been run first |
+| `init` | One-time project setup: prerequisites check, bd init, DoltHub backup, CLAUDE.md, observability tree |
+| `run`  | Run the orchestrator against the task backlog; requires init to have been run first |
+| `logs` | Inspect per-task spans/events under `~/.shreni/projects/<slug>/` |
 
 `shreni --repo ...` (no subcommand) is equivalent to `shreni run` for backward compatibility.
 
@@ -79,20 +81,24 @@ shreni run  --repo /path/to/repo [--project-name MyProject]
 
 ```
 shreni/
-├── sthapathi.py          # CLI entry point: routes init/run subcommands + orchestrator loop
-├── init.py               # shreni init: prerequisites check, bd setup, DoltHub, CLAUDE.md
+├── sthapathi.py          # CLI entry point: routes init/run/logs subcommands + orchestrator loop
+├── init.py               # shreni init: prerequisites check, bd setup, DoltHub, CLAUDE.md, ~/.shreni dir
 ├── backup.py             # bd → DoltHub backup cron (dolt push every 5 min)
-├── context.py            # Runtime dataclass (repo_root, project_name, queue file path, etc.)
+├── context.py            # Runtime dataclass (repo_root, project_name, queue file path, ~/.shreni paths)
+├── observability.py      # Span/event emission to ~/.shreni/projects/<slug>/...spans.jsonl
 ├── bd.py                 # All Beads CLI interactions
 ├── state.py              # Crash-recovery state files (.claude/)
 ├── git.py                # Git operations (branch, merge, push)
 ├── shell.py              # Logging (log, make_logger) and slugify
 ├── plugins.py            # Claude Code plugin resolution
 ├── agents/
-│   ├── runner.py         # Generic Claude SDK runner (run_agent, load_agent_prompt)
+│   ├── runner.py         # Generic Claude SDK runner — wraps each agent run in a span,
+│   │                     # writes per-task + aggregate logs, emits one event per tool call
 │   ├── silpi.py          # Silpi prompt builders (implement, address_feedback, breakdown_epic, init_project)
 │   ├── viharapala.py     # Viharapala prompt builder (review)
 │   └── parikshaka.py     # Parikshaka prompt builder (quality_check)
+├── cli/
+│   └── logs.py           # `shreni logs` viewer over ~/.shreni span streams
 └── workflow/
     ├── task_loop.py      # implement → review → (address → review)* → merge; returns task on merge
     ├── epic.py           # Epic breakdown: invoke Silpi to decompose approved epics
@@ -291,6 +297,54 @@ Silpi sets breakdown=complete → feature tasks picked up as normal tasks
 
 ## State Management
 
+### Task state machine
+
+The per-task state machine in [shreni/workflow/task_loop.py](shreni/workflow/task_loop.py):
+
+```mermaid
+stateDiagram-v2
+    [*] --> CheckBlocked: enter loop iteration
+
+    CheckBlocked --> Released: task_status == blocked
+    Released --> [*]: return None
+
+    CheckBlocked --> silpi_implement: state == silpi_implement
+    CheckBlocked --> silpi_address: state == silpi_address
+    CheckBlocked --> viharapala_review: state == viharapala_review
+    CheckBlocked --> merge: state == merge
+
+    silpi_implement --> CheckBlocked2: silpi.implement()
+    silpi_address --> CheckBlocked2: silpi.address_feedback()\n(uses bd comments)
+
+    CheckBlocked2 --> Released: blocked mid-run
+    CheckBlocked2 --> EnsureReview: not blocked
+    EnsureReview --> viharapala_review: state := viharapala_review
+
+    viharapala_review --> merge: verdict == approved
+    viharapala_review --> silpi_address: verdict == changes-required\n(round_num += 1)
+    viharapala_review --> PausedSignOff: verdict == viharapala-approved
+    viharapala_review --> viharapala_review: verdict missing\n(re-run review)
+    PausedSignOff --> [*]: clear_task, return None
+
+    merge --> CheckCommits
+    CheckCommits --> AlreadyMerged: no commits AND task_merged_to_main
+    AlreadyMerged --> [*]: close_task, return task
+
+    CheckCommits --> ReImplement: no commits AND not in main
+    ReImplement --> silpi_implement: checkout/create branch
+
+    CheckCommits --> DoMerge: branch has commits
+    DoMerge --> [*]: stash → checkout main → pull →\nsquash-merge → push → delete branch →\nclose_task, return task
+```
+
+Three terminal exits:
+
+| Exit | Trigger | Caller sees |
+|------|---------|-------------|
+| `return task` | Squash-merge succeeded, or task was already merged to main | Task complete; orchestrator enqueues for Parikshaka |
+| `return None` (paused) | `verdict == viharapala-approved` (epic awaiting author sign-off) | Orchestrator releases the task; resumes after author marks `approved` |
+| `return None` (released) | `task_status == blocked` at any check point | Orchestrator picks up other ready tasks; this one re-claimed when deps merge |
+
 ### Crash recovery (`state.py`)
 
 Three JSON files under `<repo>/.claude/`:
@@ -441,6 +495,99 @@ Each agent has a named logger produced by `make_logger(agent_name)`. Output is A
 ```
 
 Parikshaka logs appear interleaved with the main loop — it runs in the background while the next task is already being implemented.
+
+---
+
+## Observability
+
+The free-form stdout log above is for humans watching live. For going back later — comparing rounds across tasks, asking "what did Silpi spend time on?", debugging a stuck task — Shreni writes a parallel structured stream rooted at `~/.shreni/`.
+
+### Storage layout
+
+```
+~/.shreni/
+└── projects/
+    └── <project_slug>/                  ← one per Shreni project
+        ├── silpi.log                    ← per-agent aggregate (tmux tails these)
+        ├── viharapala.log
+        ├── parikshaka.log
+        ├── session-spans.jsonl          ← spans/events with no task context
+        └── tasks/
+            └── <task_id>/               ← one per bd task touched by Shreni
+                ├── spans.jsonl          ← structured timeline for this task
+                ├── silpi.log            ← Silpi raw output for this task only
+                ├── viharapala.log
+                └── parikshaka.log
+```
+
+`<project_slug>` is `slugify(project_name)`. The directory tree is created by `shreni init` (`_ensure_observability_dir`) and lazily by the runtime when a span needs to be written. Files are append-only — old runs accumulate. Crash-recovery state still lives in the target repo's `.claude/` (it must travel with the repo, not the user).
+
+### Span model
+
+Each line in `spans.jsonl` is one JSON object — OpenTelemetry-flavoured but flat:
+
+| Field | Type | When |
+|-------|------|------|
+| `ts` | ISO-8601 UTC | always |
+| `type` | `span_start` \| `span_end` \| `event` | always |
+| `name` | string (e.g. `silpi.implement`, `tool_call`) | always |
+| `span_id` | 16-hex chars | spans only |
+| `parent_span_id` | 16-hex chars | when nested |
+| `agent` | `silpi` \| `viharapala` \| `parikshaka` | when emitted by/for an agent |
+| `task_id` | bd task id | when in a task context |
+| `attrs` | object | freeform context (tool, command, file_path, verdict, ...) |
+| `duration_ms` | number | `span_end` only |
+| `status` | `ok` \| `error` | `span_end` only |
+| `error` | string | `span_end` when status=error |
+
+Spans nest via `contextvars`, so call sites do not thread span ids through every function:
+
+```
+session                                 ← session-spans.jsonl
+└── task[T-42]                          ← tasks/T-42/spans.jsonl
+    ├── silpi.implement
+    │   ├── tool_call (Bash: pytest)
+    │   └── tool_call (Edit: src/auth.py)
+    ├── viharapala.review
+    │   └── tool_call (Bash: pytest)
+    ├── (review_verdict event: approved, round=1)
+    └── (task_merged event)
+```
+
+The session span lives in `session-spans.jsonl`; everything tagged with a `task_id` lands in the task's own `spans.jsonl`. The two streams cross-reference via `parent_span_id`.
+
+### Where spans are emitted
+
+| Span / event | Emitter |
+|--------------|---------|
+| `session` (root span) | `sthapathi.main` |
+| `task` (per-task root) | `workflow.task_loop.run_task_loop` |
+| `silpi.implement` / `silpi.address_feedback.round_N` / `silpi.init_project` / `silpi.breakdown_epic` | `agents.silpi` (via runner) |
+| `viharapala.review` | `agents.viharapala` (via runner) |
+| `parikshaka.quality_check` (task) / `parikshaka.background_check` (worker) | `agents.parikshaka` + `sthapathi._parikshaka_worker` |
+| `tool_call` event (one per tool use) | `agents.runner.run_agent` |
+| `agent_finished` event (with tool_calls count) | `agents.runner.run_agent` |
+| `task_picked_up` event | `sthapathi._main_loop` |
+| `review_verdict` event | `workflow.task_loop` |
+| `task_merged` event | `workflow.task_loop` |
+
+The `agents.runner.run_agent` helper wraps every Claude SDK invocation in a span and tees output to two files:
+- `~/.shreni/projects/<slug>/<agent>.log` — aggregate, used by tmux pane tailing.
+- `~/.shreni/projects/<slug>/tasks/<task_id>/<agent>.log` — per-task, when the call site supplied a `task_id`.
+
+### Reading the stream
+
+```
+shreni logs --repo /path/to/repo                  # list tasks observed
+shreni logs --repo /path/to/repo --task T-42      # formatted timeline
+shreni logs --repo /path/to/repo --task T-42 --raw  # JSONL passthrough for jq / piping
+```
+
+The formatted timeline collapses each line to `HH:MM:SS  type  agent  name  [extras]`. Use `--raw` for downstream processing (e.g. piping to `jq` or feeding into a viewer).
+
+### Failure tolerance
+
+Observability is a side channel. The span emitter never raises in user-facing code paths — a failed write degrades to a missing log line, not a crashed task. Files are opened in append mode, so concurrent agent runs can write simultaneously without coordination (each agent invocation owns its own line writes through Python's GIL-protected `write`).
 
 ---
 

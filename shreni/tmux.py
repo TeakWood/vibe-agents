@@ -32,10 +32,12 @@ def start_log_session(ctx: Context) -> None:
         return
 
     session = f"shreni-{ctx.project_name.lower().replace(' ', '-')}"
-    log_dir = ctx.repo_root / ".claude"
+    log_dir = ctx.project_obs_dir
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    # Pre-create log files so tail -f doesn't error before the first agent run
+    # Pre-create the per-agent aggregate log files so `tail -f` does not error
+    # before the first agent run. Per-task logs live under tasks/<task_id>/ and
+    # are created on demand by the runner.
     for name in _AGENTS:
         (log_dir / f"{name}.log").touch(exist_ok=True)
 

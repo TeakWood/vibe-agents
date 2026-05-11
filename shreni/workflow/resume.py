@@ -70,7 +70,7 @@ def find_resumable_task(ctx: Context) -> tuple[dict | None, str | None, str, int
     # 4. Any non-epic task approved but not yet merged (merge step crashed)
     approved_tasks = [
         t for t in tasks_with_label("review:approved", ctx)
-        if t.get("type") != "epic"
+        if t.get("issue_type") != "epic"
     ]
     if approved_tasks:
         t = approved_tasks[0]

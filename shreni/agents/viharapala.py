@@ -11,4 +11,6 @@ async def review(task_id: str, branch: str, ctx: Context) -> None:
         f"Review task {task_id} only. It has been submitted for review on branch '{branch}'.",
         ctx,
         agent_name="viharapala",
+        task_id=task_id,
+        span_name="viharapala.review",
     )

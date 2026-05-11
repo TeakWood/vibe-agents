@@ -26,6 +26,43 @@ If the task has the label **`investigation`**, follow the
 [Investigation Tasks](#investigation-tasks) flow — your output is `bd remember`
 memories, not production code.
 
+If the acceptance criteria require human-only work that cannot be completed in
+code (manual content ingestion, dogfooding through an admin UI, IP/legal
+review, third-party data acquisition), follow [Human-Only Tasks](#human-only-tasks) —
+do **not** create an empty branch and submit it for review.
+
+---
+
+## Human-Only Tasks
+
+Some tasks describe work that engineering cannot complete by writing code:
+content-team paper ingestion, manual QA dogfooding, paper-based review,
+licensing sign-off, or "log in as admin and click X" acceptance flows. Their
+acceptance criteria say so explicitly — phrases like "content team
+responsibility", "acquisition is human work", "platform admin must…", or step
+lists that read as a runbook for a person.
+
+If you determine the task is human-only, do **not** attempt to satisfy it with
+empty commits or placeholder files — there is nothing to ship, and the
+orchestrator will trap itself in a Silpi/Viharapala loop on an empty branch.
+
+Instead:
+
+```bash
+bd set-state <id> status=blocked \
+  --reason "Human-only task: <one-line summary of why engineering cannot do this>" \
+  --json
+```
+
+Then stop. The orchestrator's blocked-task guard will release the task back to
+the main loop, and the human owner can close it manually after the work is
+done.
+
+Be conservative: only mark `status=blocked` when the task is unambiguously
+human-only. If there is *any* engineering surface (a script to seed data, a
+helper to validate inputs, an admin endpoint to expose), implement that
+surface and let the human do the part that needs them.
+
 ---
 
 ## Implementation Loop

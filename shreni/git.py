@@ -16,6 +16,29 @@ def checkout(branch: str, ctx: Context) -> None:
     run_cmd(["git", "checkout", branch], ctx.repo_root)
 
 
+def has_uncommitted_changes(ctx: Context) -> bool:
+    """True if the working tree has any modified or untracked files."""
+    out = run_cmd_output(["git", "status", "--porcelain"], ctx.repo_root)
+    return bool(out.strip())
+
+
+def stash_save(message: str, ctx: Context) -> bool:
+    """Stash modified + untracked files. Returns True if a stash was created.
+
+    Used to keep orchestrator-side artefacts (bd backup logs, generated test
+    fixtures) from blocking `git checkout` between tasks. Pop with stash_pop.
+    """
+    if not has_uncommitted_changes(ctx):
+        return False
+    run_cmd(["git", "stash", "push", "-u", "-m", message], ctx.repo_root)
+    return True
+
+
+def stash_pop(ctx: Context) -> None:
+    """Restore the most recent stash. Caller handles failures (conflicts)."""
+    run_cmd(["git", "stash", "pop"], ctx.repo_root)
+
+
 def pull(ctx: Context) -> None:
     run_cmd(["git", "pull"], ctx.repo_root)
 

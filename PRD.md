@@ -90,6 +90,16 @@ The human remains in the loop for decisions that require judgment: approving epi
 - Parikshaka reads the file before processing any suite output and ignores all matching tests silently.
 - Patterns support `*` as a wildcard and are matched as substrings of the full test name.
 
+### Observability
+
+> As a developer, I want to see exactly what each agent did on each task — which tools it called, how long it took, what verdict it produced — without grepping through interleaved log files.
+
+- All Sthapathi sessions write structured spans and per-agent logs to `~/.shreni/projects/<slug>/`, isolated per project.
+- Each task gets its own subfolder (`tasks/<task_id>/`) containing `spans.jsonl` (a structured timeline) and per-agent `.log` files (raw output).
+- Spans nest: `session → task → silpi.implement → tool_call`, so a task's full execution can be reconstructed from one file.
+- `shreni init` creates `~/.shreni/projects/<slug>/` so it is ready before the first run.
+- `shreni logs --repo <path>` lists tasks observed; `shreni logs --repo <path> --task T-1` prints the timeline for one task.
+
 ### Crash recovery
 
 > As a developer, I want the system to resume where it left off if it crashes or is restarted.
@@ -139,6 +149,11 @@ The human remains in the loop for decisions that require judgment: approving epi
 | F20 | `shreni init` must append backup configuration to `.beads/config.yaml` (`enabled: true`, `git-push: false`, `interval: 15m`) if not already present. `git-push: false` is required to prevent backup commits from racing with agent commits. |
 | F21 | `shreni init` must register a DoltHub remote (`bd dolt remote add origin https://doltremoteapi.dolthub.com/<user>/<db>`) and perform an initial push using `dolt push origin main` directly from `.beads/embeddeddolt/<prefix>/`. |
 | F22 | `shreni init` must install a cron job that pushes `<repo>/.beads/embeddeddolt/<prefix>/` to DoltHub every 5 minutes using `dolt push origin main`. The push must be invoked directly (not via `bd dolt push`) to avoid the `bd dolt push` port bug in server mode. |
+| F25 | `shreni init` must create the per-project observability tree at `~/.shreni/projects/<slug>/` (with a `tasks/` subfolder), where `<slug>` is derived from the project name. Existing folders must be left intact. |
+| F26 | The orchestrator must emit a structured JSONL span stream per task at `~/.shreni/projects/<slug>/tasks/<task_id>/spans.jsonl`, capturing at minimum: task pickup, each Silpi/Viharapala round, every tool call inside each agent, the review verdict, and the merge result. Orchestrator-level events that do not belong to a task (session start/stop, idle ticks) must be written to `~/.shreni/projects/<slug>/session-spans.jsonl`. |
+| F27 | Each agent invocation (Silpi, Viharapala, Parikshaka) must write its raw output to a per-task log at `~/.shreni/projects/<slug>/tasks/<task_id>/<agent>.log`, in addition to a per-agent aggregate log at `~/.shreni/projects/<slug>/<agent>.log` (used by the tmux pane tailing). |
+| F28 | Each span record must be one JSON object per line containing: ISO-8601 timestamp (`ts`), `type` (`span_start`/`span_end`/`event`), `name`, `span_id`, optional `parent_span_id` for nesting, optional `agent` and `task_id`, and on `span_end`: `duration_ms` and `status` (`ok`/`error`). |
+| F29 | A `shreni logs --repo <path>` subcommand must list all task ids that have a span stream on disk; `shreni logs --repo <path> --task <id>` must print a formatted timeline; the `--raw` flag must dump the underlying JSONL unchanged. |
 
 ### Non-functional
 
@@ -149,6 +164,8 @@ The human remains in the loop for decisions that require judgment: approving epi
 | N3 | All `bd` task state transitions must use `--json` for structured, parseable output. |
 | N4 | The Parikshaka background worker must process tasks sequentially to avoid concurrent `bd` writes or e2e suite conflicts. |
 | N5 | The system must not run inside an active Claude Code session (`CLAUDECODE` env var check on startup). |
+| N6 | Observability writes must never block or fail the agent loop. A failure to write a span or log line must be tolerated silently — observability is a side channel, not a critical path. |
+| N7 | Logs and spans must be isolated per project under `~/.shreni/projects/<slug>/`. Two Shreni projects on the same machine must not share log files. |
 
 ---
 
@@ -158,6 +175,8 @@ The human remains in the loop for decisions that require judgment: approving epi
 |---------------|-----------|-------|------------|------------|
 | Check machine prerequisites | ✅ | | | |
 | Initialise bd, DoltHub remote, backup cron | ✅ | | | |
+| Initialise observability tree (`~/.shreni/projects/<slug>/`) | ✅ | | | |
+| Emit per-task spans and per-agent logs | ✅ | ✅ | ✅ | ✅ |
 | Create/update CLAUDE.md | | ✅ | | |
 | Pick tasks from backlog | ✅ | | | |
 | Create/delete feature branches | ✅ | | | |
