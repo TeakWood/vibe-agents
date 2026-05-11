@@ -290,6 +290,10 @@ async def main() -> None:
     logs_sub.add_argument("--project-name", default=None, help="Project name (defaults to repo dir name)")
     logs_sub.add_argument("--task", default=None, help="Task id to dump (omit to list tasks)")
     logs_sub.add_argument("--raw", action="store_true", help="Print raw JSONL instead of a formatted timeline")
+    logs_sub.add_argument(
+        "--perfetto", type=Path, default=None, metavar="OUT.json",
+        help="Export a Chrome Trace Event file viewable at https://ui.perfetto.dev",
+    )
 
     # Back-compat: shreni --repo ... (no subcommand) → run
     parser.add_argument("--repo", nargs="?", type=Path, help=argparse.SUPPRESS)
@@ -326,6 +330,10 @@ async def main() -> None:
         return
 
     if command == "logs":
+        perfetto_out = getattr(args, "perfetto", None)
+        if perfetto_out is not None:
+            from .cli.perfetto import export as export_perfetto
+            sys.exit(export_perfetto(ctx, task=getattr(args, "task", None), output=perfetto_out))
         from .cli.logs import run_logs
         sys.exit(run_logs(ctx, task=getattr(args, "task", None), raw=getattr(args, "raw", False)))
 

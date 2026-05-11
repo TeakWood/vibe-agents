@@ -578,12 +578,27 @@ The `agents.runner.run_agent` helper wraps every Claude SDK invocation in a span
 ### Reading the stream
 
 ```
-shreni logs --repo /path/to/repo                  # list tasks observed
-shreni logs --repo /path/to/repo --task T-42      # formatted timeline
-shreni logs --repo /path/to/repo --task T-42 --raw  # JSONL passthrough for jq / piping
+shreni logs --repo /path/to/repo                          # list tasks observed
+shreni logs --repo /path/to/repo --task T-42              # formatted timeline
+shreni logs --repo /path/to/repo --task T-42 --raw        # JSONL passthrough for jq
+shreni logs --repo /path/to/repo --perfetto out.json      # bundle session + all tasks
+shreni logs --repo /path/to/repo --task T-42 --perfetto out.json   # single-task waterfall
 ```
 
 The formatted timeline collapses each line to `HH:MM:SS  type  agent  name  [extras]`. Use `--raw` for downstream processing (e.g. piping to `jq` or feeding into a viewer).
+
+**Perfetto export** ([`shreni/cli/perfetto.py`](shreni/cli/perfetto.py)) writes a [Chrome Trace Event Format](https://docs.google.com/document/d/1CvAClvFfyA5R-PhYUmn5OOQtYMH4h6I0nSsKchNAySU/preview) JSON file viewable at [ui.perfetto.dev](https://ui.perfetto.dev) (drag-drop) or `chrome://tracing`. The mapping:
+
+| Shreni concept | Perfetto concept |
+|----------------|------------------|
+| Lane per `task_id` (plus a `session` lane for orchestrator events) | `pid` (process) |
+| Agent (`silpi`/`viharapala`/`parikshaka`) or `orchestrator` for task-level spans | `tid` (thread) |
+| `span_start` + matching `span_end` (paired by `span_id`) | `ph: "X"` complete event with `ts` + `dur` |
+| `event` | `ph: "i"` instant event |
+| `attrs` | `args` |
+| `status=error` | surfaced in `args` |
+
+Within each `(pid, tid)` lane, Perfetto stacks nested spans automatically based on `ts`/`dur` ordering — so a `silpi.implement` span and its child `tool_call` instants render as one span with markers inside. Unclosed spans (e.g. the process crashed mid-task) are skipped to avoid dangling entries.
 
 ### Failure tolerance
 

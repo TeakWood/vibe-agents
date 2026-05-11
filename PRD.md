@@ -154,6 +154,7 @@ The human remains in the loop for decisions that require judgment: approving epi
 | F27 | Each agent invocation (Silpi, Viharapala, Parikshaka) must write its raw output to a per-task log at `~/.shreni/projects/<slug>/tasks/<task_id>/<agent>.log`, in addition to a per-agent aggregate log at `~/.shreni/projects/<slug>/<agent>.log` (used by the tmux pane tailing). |
 | F28 | Each span record must be one JSON object per line containing: ISO-8601 timestamp (`ts`), `type` (`span_start`/`span_end`/`event`), `name`, `span_id`, optional `parent_span_id` for nesting, optional `agent` and `task_id`, and on `span_end`: `duration_ms` and `status` (`ok`/`error`). |
 | F29 | A `shreni logs --repo <path>` subcommand must list all task ids that have a span stream on disk; `shreni logs --repo <path> --task <id>` must print a formatted timeline; the `--raw` flag must dump the underlying JSONL unchanged. |
+| F30 | `shreni logs --perfetto <path>` must export the span stream as a Chrome Trace Event Format JSON file viewable at https://ui.perfetto.dev. With `--task <id>` the file is scoped to one task; without, it bundles session + all task spans. Each `task_id` becomes a Perfetto process lane; each agent becomes a thread within that lane; span pairs collapse to complete (`ph: "X"`) events; standalone events become instant (`ph: "i"`) events. |
 
 ### Non-functional
 
