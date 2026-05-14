@@ -85,7 +85,8 @@ shreni/
 ├── init.py               # shreni init: prerequisites check, bd setup, DoltHub, CLAUDE.md, ~/.shreni dir
 ├── backup.py             # bd → DoltHub backup cron (dolt push every 5 min)
 ├── context.py            # Runtime dataclass (repo_root, project_name, queue file path, ~/.shreni paths)
-├── observability.py      # Span/event emission to ~/.shreni/projects/<slug>/...spans.jsonl
+├── observability.py      # Span/event emission to ~/.shreni/projects/<slug>/...spans.jsonl (and OTel)
+├── phoenix.py            # Arize Phoenix OTel exporter setup + reachability probe
 ├── bd.py                 # All Beads CLI interactions
 ├── state.py              # Crash-recovery state files (.claude/)
 ├── git.py                # Git operations (branch, merge, push)
@@ -98,7 +99,9 @@ shreni/
 │   ├── viharapala.py     # Viharapala prompt builder (review)
 │   └── parikshaka.py     # Parikshaka prompt builder (quality_check)
 ├── cli/
-│   └── logs.py           # `shreni logs` viewer over ~/.shreni span streams
+│   ├── logs.py           # `shreni logs` viewer over ~/.shreni span streams
+│   ├── perfetto.py       # `shreni logs --perfetto` → Chrome Trace Event JSON
+│   └── phoenix_cmd.py    # `shreni phoenix {start,status,open}` server helpers
 └── workflow/
     ├── task_loop.py      # implement → review → (address → review)* → merge; returns task on merge
     ├── epic.py           # Epic breakdown: invoke Silpi to decompose approved epics
@@ -604,6 +607,65 @@ Within each `(pid, tid)` lane, Perfetto stacks nested spans automatically based 
 
 Observability is a side channel. The span emitter never raises in user-facing code paths — a failed write degrades to a missing log line, not a crashed task. Files are opened in append mode, so concurrent agent runs can write simultaneously without coordination (each agent invocation owns its own line writes through Python's GIL-protected `write`).
 
+### Arize Phoenix (live trace UI)
+
+Phoenix is an opt-in **sidechannel** on top of the JSONL stream — JSONL stays the source of truth, Phoenix gets a mirror of the same events so they show up in a browser.
+
+```
+┌───────────────────────────┐         ┌──────────────────────────┐
+│   shreni run (sthapathi)  │         │   Phoenix server         │
+│                           │         │   (separate process)     │
+│  observability.span()/    │  OTLP   │  http://localhost:6006   │
+│  emit_event()             │ ──HTTP─►│                          │
+│                           │         │  - sqlite trace store    │
+│       │                   │         │  - React UI              │
+│       └─► JSONL (always)  │         │  - project picker        │
+└───────────────────────────┘         └──────────────────────────┘
+                                              ▲
+                                              │ browser
+                                              ▼
+                                       developer
+```
+
+**Mapping**:
+
+| Shreni concept | Phoenix concept |
+|----------------|-----------------|
+| `slugify(project_name)` | Phoenix `project_name` (separate trace store per project) |
+| `session` / `task` span | OTel span with `openinference.span.kind=CHAIN` |
+| `silpi.implement` / `viharapala.review` / `parikshaka.quality_check` span | OTel span with `openinference.span.kind=AGENT` and `agent.name` attribute |
+| `tool_call`, `review_verdict`, `task_merged`, `agent_finished` events | OTel span events on the parent span |
+| `attrs` dict | OTel attributes (non-scalar values stringified via `_otel_safe`) |
+| `task_id` field | `task.id` OTel attribute (set on both spans and events for filtering in the UI) |
+| Span error (Python exception inside the context manager) | OTel status `ERROR` + `record_exception` |
+
+**Setup flow** ([`shreni/phoenix.py`](shreni/phoenix.py)):
+
+1. `sthapathi.main` calls `phoenix.setup(ctx)` once before opening the session span.
+2. `setup()` probes `<endpoint>/` with a 0.5s HTTP timeout. If unreachable → log a single info line and return; agent loop continues with JSONL only.
+3. If reachable, calls `phoenix.otel.register(project_name=ctx.project_slug, ...)` which installs a `BatchSpanProcessor` shipping to `<endpoint>/v1/traces`. The `verbose=False` flag suppresses Phoenix's banner; the OTLP exporter's retry logger is bumped to `CRITICAL` so a server restart doesn't spam stdout.
+4. `observability.span()` opens an OTel span alongside the JSONL `span_start` write; `emit_event()` calls `current_span.add_event(...)`. Both wrap the OTel call in try/except — a misbehaving exporter never bubbles up.
+5. On shutdown, `phoenix.shutdown()` calls `force_flush()` + `shutdown()` on the tracer provider so the last batch reaches Phoenix before the process exits.
+
+**Why JSONL stays primary**: BatchSpanProcessor drops spans on full buffers, Phoenix can be down, the network can fail. JSONL is local, append-only, and crash-safe — exactly what an autonomous overnight loop needs. Phoenix is the friendly viewer; JSONL is the audit trail.
+
+**Configuration**:
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `SHRENI_PHOENIX_ENDPOINT` | `http://localhost:6006` | Base URL of the Phoenix server (the `/v1/traces` suffix is appended internally) |
+| `SHRENI_PHOENIX_DISABLED` | unset | Set to `1` to skip Phoenix entirely even when reachable (useful for tests / CI) |
+
+**CLI** ([`shreni/cli/phoenix_cmd.py`](shreni/cli/phoenix_cmd.py)):
+
+```
+shreni phoenix start --repo R [--port 6006] [--host 127.0.0.1]   # foreground `phoenix serve`
+shreni phoenix status --repo R                                    # probe the endpoint
+shreni phoenix open --repo R                                      # open the project page
+```
+
+`start` shells out to the `phoenix` CLI (`pip install arize-phoenix`). Users who prefer Docker can ignore this and run `docker run -p 6006:6006 arizephoenix/phoenix:latest` instead — Shreni only cares that the endpoint is reachable.
+
 ---
 
 ## Dependencies
@@ -612,6 +674,9 @@ Observability is a side channel. The span emitter never raises in user-facing co
 |----------------|---------|
 | `claude-agent-sdk` | Claude sub-agent runner |
 | `anyio` | Async runtime and memory object streams for the Parikshaka background worker |
+| `arize-phoenix-otel` | OpenTelemetry exporter pre-configured for Phoenix |
+| `opentelemetry-{api,sdk,exporter-otlp-proto-http}` | OTel SDK + OTLP-over-HTTP transport for the Phoenix sidechannel |
+| `arize-phoenix` *(optional, `phoenix-server` extra)* | The Phoenix server itself — only required if you want to run it on the same machine |
 | `bd` (CLI, external) | Beads issue tracker — task management |
 | `dolt` (CLI, external) | Dolt CLI — DoltHub credential management and direct push |
 | `claude` (CLI, external) | Claude Code CLI — plugin installation |

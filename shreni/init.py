@@ -122,6 +122,31 @@ def _ensure_observability_dir(ctx: Context) -> None:
     log(f"Observability dir ready: {obs_dir}")
 
 
+def _check_phoenix_available(ctx: Context) -> None:
+    """Report whether the optional Arize Phoenix viewer is wired up.
+
+    Phoenix is opt-in. If it is not installed we just print a single hint —
+    runtime falls back to JSONL traces silently. We do not exit on missing.
+    """
+    from . import phoenix as phoenix_otel
+
+    try:
+        import phoenix.otel  # noqa: F401
+        log(
+            f"Phoenix SDK installed. Start the viewer with: shreni phoenix start "
+            f"(then traces land under project '{ctx.project_slug}')."
+        )
+    except ImportError:
+        log(
+            "Phoenix viewer optional — install for live trace UI:\n"
+            "    pip install arize-phoenix              # server\n"
+            "    pip install arize-phoenix-otel         # exporter\n"
+            "  then: shreni phoenix start && shreni phoenix open"
+        )
+    # endpoint() never raises; emit the configured endpoint so users see it.
+    log(f"Phoenix endpoint (override with SHRENI_PHOENIX_ENDPOINT): {phoenix_otel.endpoint()}")
+
+
 def _bd_prefix(project_name: str) -> str:
     """Derive the bd issue prefix from the project name (lowercase slug)."""
     return re.sub(r"[^a-z0-9]", "-", project_name.lower()).strip("-")
@@ -330,6 +355,7 @@ async def run_init(ctx: Context) -> None:
 
     # ── Phase 2: Per-project setup ────────────────────────────────────────────
     _ensure_observability_dir(ctx)
+    _check_phoenix_available(ctx)
     prefix = _ensure_bd_initialized(ctx)
     _gitignore_beads(ctx)
     _configure_beads_backup(ctx)

@@ -26,6 +26,30 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .context import Context
+from . import phoenix as _phoenix
+
+
+def _otel_safe(value: Any) -> Any:
+    """Coerce a value into something OTel attribute-storage accepts.
+
+    OTel attributes are str / bool / int / float (or homogeneous sequences of
+    those). Anything else gets stringified so the trace stays self-describing
+    in Phoenix instead of being silently dropped.
+    """
+    if isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value]
+    return str(value)
+
+
+def _otel_kind(span_name: str, agent: str | None) -> str:
+    """Map a Shreni span to an OpenInference span kind for Phoenix rendering."""
+    if span_name == "session" or span_name == "task":
+        return "CHAIN"
+    if agent:
+        return "AGENT"
+    return "CHAIN"
 
 _current_span_id: ContextVar[str | None] = ContextVar("shreni_current_span_id", default=None)
 _current_task_id: ContextVar[str | None] = ContextVar("shreni_current_task_id", default=None)
@@ -77,6 +101,23 @@ def emit_event(
         record["attrs"] = attrs
     _write(ctx, tid, record)
 
+    if _phoenix.is_active():
+        try:
+            from opentelemetry import trace as _otel_trace
+            current_otel = _otel_trace.get_current_span()
+            if current_otel and current_otel.is_recording():
+                otel_attrs: dict[str, Any] = {}
+                if agent:
+                    otel_attrs["agent.name"] = agent
+                if tid:
+                    otel_attrs["task.id"] = tid
+                if attrs:
+                    for k, v in attrs.items():
+                        otel_attrs[k] = _otel_safe(v)
+                current_otel.add_event(name, attributes=otel_attrs)
+        except Exception:
+            pass  # observability must never break the agent loop
+
 
 @contextmanager
 def span(
@@ -92,6 +133,10 @@ def span(
     If ``task_id`` is provided, it becomes the current task for any nested
     spans/events until this context exits. Nested spans automatically link
     to this span via ``parent_span_id``.
+
+    When Phoenix is active (see ``shreni.phoenix``), the same span is also
+    opened in OpenTelemetry so it appears in the Phoenix UI under the
+    matching project. JSONL is always written; OTel is best-effort.
     """
     span_id = uuid.uuid4().hex[:16]
     tid = task_id or _current_task_id.get()
@@ -116,6 +161,9 @@ def span(
     span_token = _current_span_id.set(span_id)
     task_token = _current_task_id.set(task_id) if task_id else None
 
+    otel_span_cm = _open_otel_span(name, agent=agent, task_id=tid, attrs=attrs)
+    otel_span = otel_span_cm.__enter__() if otel_span_cm else None
+
     started = time.monotonic()
     status = "ok"
     error_message: str | None = None
@@ -124,12 +172,20 @@ def span(
     except BaseException as exc:
         status = "error"
         error_message = f"{type(exc).__name__}: {exc}"
+        if otel_span is not None:
+            _otel_record_error(otel_span, exc)
         raise
     finally:
         duration_ms = round((time.monotonic() - started) * 1000, 2)
         _current_span_id.reset(span_token)
         if task_token is not None:
             _current_task_id.reset(task_token)
+
+        if otel_span_cm is not None:
+            try:
+                otel_span_cm.__exit__(None, None, None)
+            except Exception:
+                pass
 
         end_record: dict[str, Any] = {
             "ts": _now_iso(),
@@ -148,6 +204,47 @@ def span(
         if error_message:
             end_record["error"] = error_message
         _write(ctx, tid, end_record)
+
+
+def _open_otel_span(
+    name: str,
+    *,
+    agent: str | None,
+    task_id: str | None,
+    attrs: dict[str, Any] | None,
+):
+    """Return an entered-or-not context manager for the OTel span, or None.
+
+    Errors are swallowed: a misbehaving exporter must never break the agent
+    loop. Returning ``None`` keeps the JSONL-only path on the happy path.
+    """
+    tracer = _phoenix.get_tracer()
+    if tracer is None:
+        return None
+    try:
+        otel_attrs: dict[str, Any] = {
+            "openinference.span.kind": _otel_kind(name, agent),
+            "shreni.span.name": name,
+        }
+        if agent:
+            otel_attrs["agent.name"] = agent
+        if task_id:
+            otel_attrs["task.id"] = task_id
+        if attrs:
+            for k, v in attrs.items():
+                otel_attrs[f"shreni.{k}"] = _otel_safe(v)
+        return tracer.start_as_current_span(name, attributes=otel_attrs)
+    except Exception:
+        return None
+
+
+def _otel_record_error(otel_span: Any, exc: BaseException) -> None:
+    try:
+        from opentelemetry.trace import Status, StatusCode
+        otel_span.set_status(Status(StatusCode.ERROR, f"{type(exc).__name__}: {exc}"))
+        otel_span.record_exception(exc)
+    except Exception:
+        pass
 
 
 def read_task_spans(ctx: Context, task_id: str) -> list[dict[str, Any]]:

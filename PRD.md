@@ -100,6 +100,15 @@ The human remains in the loop for decisions that require judgment: approving epi
 - `shreni init` creates `~/.shreni/projects/<slug>/` so it is ready before the first run.
 - `shreni logs --repo <path>` lists tasks observed; `shreni logs --repo <path> --task T-1` prints the timeline for one task.
 
+### Live trace viewer (Arize Phoenix)
+
+> As a developer, I want a live, browsable trace UI that I can leave open in a tab while Shreni runs — showing every project's traces in one place — without giving up the local JSONL stream.
+
+- A single Phoenix instance can hold traces from every Shreni project on the machine. Each Shreni project shows up as its own Phoenix project (mapped via `slugify(project_name)`).
+- The developer runs `shreni phoenix start` (or any equivalent: Docker, systemd, Phoenix Cloud). Shreni auto-detects the running server at `http://localhost:6006` and starts shipping spans alongside the JSONL stream.
+- If Phoenix is not running, Shreni falls back to JSONL only — agents are never blocked by an unreachable viewer.
+- `shreni phoenix status` probes the configured endpoint; `shreni phoenix open` opens the current project's page in the browser.
+
 ### Crash recovery
 
 > As a developer, I want the system to resume where it left off if it crashes or is restarted.
@@ -155,6 +164,10 @@ The human remains in the loop for decisions that require judgment: approving epi
 | F28 | Each span record must be one JSON object per line containing: ISO-8601 timestamp (`ts`), `type` (`span_start`/`span_end`/`event`), `name`, `span_id`, optional `parent_span_id` for nesting, optional `agent` and `task_id`, and on `span_end`: `duration_ms` and `status` (`ok`/`error`). |
 | F29 | A `shreni logs --repo <path>` subcommand must list all task ids that have a span stream on disk; `shreni logs --repo <path> --task <id>` must print a formatted timeline; the `--raw` flag must dump the underlying JSONL unchanged. |
 | F30 | `shreni logs --perfetto <path>` must export the span stream as a Chrome Trace Event Format JSON file viewable at https://ui.perfetto.dev. With `--task <id>` the file is scoped to one task; without, it bundles session + all task spans. Each `task_id` becomes a Perfetto process lane; each agent becomes a thread within that lane; span pairs collapse to complete (`ph: "X"`) events; standalone events become instant (`ph: "i"`) events. |
+| F31 | At `shreni run` startup, the orchestrator must probe `$SHRENI_PHOENIX_ENDPOINT` (default `http://localhost:6006`) with a sub-second timeout. If reachable, it must configure an OpenTelemetry exporter that mirrors every span and event to Phoenix in addition to writing JSONL. If unreachable or the `arize-phoenix-otel` SDK is not installed, JSONL must continue to write and a single info line must be logged — no retries on stdout. |
+| F32 | Each Shreni project must map to a Phoenix project of the same `slugify(project_name)`, so multiple projects feeding the same Phoenix instance do not bleed traces. |
+| F33 | Each span emitted to Phoenix must carry `openinference.span.kind` (`AGENT` when emitted by Silpi/Viharapala/Parikshaka, `CHAIN` for orchestrator spans like `session` and `task`) plus `agent.name` and `task.id` where applicable, so Phoenix's UI groups them correctly. |
+| F34 | A `shreni phoenix` subcommand must offer at minimum `start` (run `phoenix serve`), `status` (probe the endpoint and report), and `open` (open the project page in the default browser). The subcommand must not exit with an error when the SDK is missing — it must print exact remediation steps. |
 
 ### Non-functional
 
@@ -167,6 +180,7 @@ The human remains in the loop for decisions that require judgment: approving epi
 | N5 | The system must not run inside an active Claude Code session (`CLAUDECODE` env var check on startup). |
 | N6 | Observability writes must never block or fail the agent loop. A failure to write a span or log line must be tolerated silently — observability is a side channel, not a critical path. |
 | N7 | Logs and spans must be isolated per project under `~/.shreni/projects/<slug>/`. Two Shreni projects on the same machine must not share log files. |
+| N8 | The Phoenix exporter must be additive, never substitutive. JSONL remains the source of truth — an unreachable Phoenix, a misconfigured exporter, or a missing SDK must never lose a span on disk. |
 
 ---
 

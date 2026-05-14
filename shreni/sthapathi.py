@@ -29,6 +29,7 @@ from .bd import (
 )
 from .context import Context
 from .observability import emit_event, span
+from . import phoenix as phoenix_otel
 from .git import (
     branch_exists,
     branch_has_commits,
@@ -273,9 +274,10 @@ async def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Commands:\n"
-            "  init  Set up a new project (bd init, DoltHub backup, CLAUDE.md)\n"
-            "  run   Run the orchestrator against the project backlog (default)\n"
-            "  logs  Inspect per-task spans/events under ~/.shreni/projects/<slug>/\n"
+            "  init     Set up a new project (bd init, DoltHub backup, CLAUDE.md)\n"
+            "  run      Run the orchestrator against the project backlog (default)\n"
+            "  logs     Inspect per-task spans/events under ~/.shreni/projects/<slug>/\n"
+            "  phoenix  Start / probe / open the Arize Phoenix trace viewer\n"
         ),
     )
     subparsers = parser.add_subparsers(dest="command")
@@ -294,6 +296,17 @@ async def main() -> None:
         "--perfetto", type=Path, default=None, metavar="OUT.json",
         help="Export a Chrome Trace Event file viewable at https://ui.perfetto.dev",
     )
+
+    # Phoenix sub-subcommands: shreni phoenix {start,status,open}
+    phx_sub = subparsers.add_parser("phoenix", help="Manage the Arize Phoenix trace viewer.")
+    phx_sub.add_argument("--repo", required=True, type=Path, help="Path to the git repository")
+    phx_sub.add_argument("--project-name", default=None, help="Project name (defaults to repo dir name)")
+    phx_actions = phx_sub.add_subparsers(dest="phoenix_action")
+    phx_start = phx_actions.add_parser("start", help="Run `phoenix serve` in the foreground.")
+    phx_start.add_argument("--port", type=int, default=6006)
+    phx_start.add_argument("--host", default="127.0.0.1")
+    phx_actions.add_parser("status", help="Probe the Phoenix endpoint.")
+    phx_actions.add_parser("open", help="Open the project page in your browser.")
 
     # Back-compat: shreni --repo ... (no subcommand) → run
     parser.add_argument("--repo", nargs="?", type=Path, help=argparse.SUPPRESS)
@@ -337,6 +350,18 @@ async def main() -> None:
         from .cli.logs import run_logs
         sys.exit(run_logs(ctx, task=getattr(args, "task", None), raw=getattr(args, "raw", False)))
 
+    if command == "phoenix":
+        from .cli import phoenix_cmd
+        action = getattr(args, "phoenix_action", None) or "status"
+        if action == "start":
+            sys.exit(phoenix_cmd.cmd_start(port=args.port, host=args.host))
+        if action == "status":
+            sys.exit(phoenix_cmd.cmd_status(ctx))
+        if action == "open":
+            sys.exit(phoenix_cmd.cmd_open(ctx))
+        print(f"Unknown phoenix action: {action}", file=sys.stderr)
+        sys.exit(1)
+
     # ── run ───────────────────────────────────────────────────────────────────
     log(f"Sthapathi started for '{ctx.project_name}' at {ctx.repo_root}")
     if _PARIKSHAKA_ENABLED:
@@ -367,23 +392,29 @@ async def main() -> None:
             for entry in pending:
                 await send_channel.send((entry["id"], entry["title"]))
 
+    # ── Initialise Phoenix sidechannel (no-op if disabled / unreachable) ─────
+    phoenix_otel.setup(ctx)
+
     # ── Run main loop and Parikshaka worker in parallel ───────────────────────
-    with span(
-        ctx,
-        "session",
-        attrs={
-            "project": ctx.project_name,
-            "repo_root": str(ctx.repo_root),
-            "parikshaka_enabled": _PARIKSHAKA_ENABLED,
-        },
-    ):
-        async with anyio.create_task_group() as tg:
-            if _PARIKSHAKA_ENABLED:
-                tg.start_soon(_parikshaka_worker, recv_channel, ctx)
-            try:
-                await _main_loop(send_channel, ctx)
-            finally:
-                await send_channel.aclose()
+    try:
+        with span(
+            ctx,
+            "session",
+            attrs={
+                "project": ctx.project_name,
+                "repo_root": str(ctx.repo_root),
+                "parikshaka_enabled": _PARIKSHAKA_ENABLED,
+            },
+        ):
+            async with anyio.create_task_group() as tg:
+                if _PARIKSHAKA_ENABLED:
+                    tg.start_soon(_parikshaka_worker, recv_channel, ctx)
+                try:
+                    await _main_loop(send_channel, ctx)
+                finally:
+                    await send_channel.aclose()
+    finally:
+        phoenix_otel.shutdown()
 
 
 def cli() -> None:
