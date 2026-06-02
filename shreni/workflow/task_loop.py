@@ -57,14 +57,17 @@ async def run_task_loop(
 
     with span(
         ctx,
-        "task",
+        task_id,
         task_id=task_id,
         attrs={
+            "shreni.span.type": "task",
             "title": task.get("title", ""),
             "branch": branch,
             "start_state": start_state,
             "start_round": start_round,
             "issue_type": task.get("issue_type"),
+            "input.value": f"{task_id}: {task.get('title', '')}",
+            "input.mime_type": "text/plain",
         },
     ):
         return await _drive_task(task, branch, round_num, state, ctx)
@@ -144,7 +147,7 @@ async def _drive_task(
                     # Merge landed in main but bd close failed previously.
                     # Close it now and exit cleanly rather than re-implementing.
                     log(f"Task {task_id} already merged to main — closing.")
-                    close_task(task_id, "Approved and merged to main", ctx)
+                    close_task(task_id, "Approved and merged to main", ctx, force=True)
                     clear_task(ctx)
                     return task
 
@@ -182,7 +185,7 @@ async def _drive_task(
                     log(f"Warning: could not restore pre-merge stash automatically ({e}). Run `git stash pop` to recover.")
             log("Merged and pushed.")
 
-            close_task(task_id, "Approved and merged to main", ctx)
+            close_task(task_id, "Approved and merged to main", ctx, force=True)
             clear_task(ctx)
             emit_event(
                 ctx,

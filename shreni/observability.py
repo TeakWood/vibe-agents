@@ -206,6 +206,16 @@ def span(
         _write(ctx, tid, end_record)
 
 
+def _otel_attr_key(key: str) -> str:
+    """Pass already-namespaced keys through unchanged; prefix bare keys with ``shreni.``.
+
+    Dotted keys (``input.value``, ``openinference.span.kind``, ``llm.model_name``)
+    are reserved namespaces — re-prefixing them would hide them from Phoenix
+    renderers that look for the canonical OpenInference / OTel names.
+    """
+    return key if "." in key else f"shreni.{key}"
+
+
 def _open_otel_span(
     name: str,
     *,
@@ -232,10 +242,28 @@ def _open_otel_span(
             otel_attrs["task.id"] = task_id
         if attrs:
             for k, v in attrs.items():
-                otel_attrs[f"shreni.{k}"] = _otel_safe(v)
+                otel_attrs[_otel_attr_key(k)] = _otel_safe(v)
         return tracer.start_as_current_span(name, attributes=otel_attrs)
     except Exception:
         return None
+
+
+def set_current_span_attribute(key: str, value: Any) -> None:
+    """Attach a single attribute to the currently active OTel span, if any.
+
+    Useful when the value is only known *during* span execution (e.g. an
+    agent's accumulated output). No-op when Phoenix is inactive.
+    """
+    if not _phoenix.is_active():
+        return
+    try:
+        from opentelemetry import trace as _otel_trace
+        current = _otel_trace.get_current_span()
+        if current is None or not current.is_recording():
+            return
+        current.set_attribute(_otel_attr_key(key), _otel_safe(value))
+    except Exception:
+        pass
 
 
 def _otel_record_error(otel_span: Any, exc: BaseException) -> None:

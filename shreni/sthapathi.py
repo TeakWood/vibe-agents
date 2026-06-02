@@ -22,6 +22,7 @@ from .bd import (
     claim_task,
     close_task,
     ensure_initialized,
+    epic_ready_to_close,
     ready_tasks,
     set_state,
     task_status,
@@ -65,6 +66,24 @@ _PARIKSHAKA_ENABLED = False
 
 _parikshaka = make_logger("Parikshaka")
 
+# Epics the user is reviewing personally — they'll close (or approve) these
+# independently. Silpi must never break them down while this label is present.
+_USER_REVIEW_LABEL = "review:user-review"
+
+
+def _user_review_epic_ids(ctx: Context) -> set[str]:
+    """IDs of open epics carrying `review:user-review`.
+
+    These are under the user's own review and will be closed by the user
+    independently — the orchestrator identifies them so Silpi skips them
+    rather than breaking them down.
+    """
+    return {
+        t["id"]
+        for t in tasks_with_label(_USER_REVIEW_LABEL, ctx)
+        if t.get("issue_type") == "epic"
+    }
+
 
 async def _parikshaka_worker(
     recv: anyio.abc.ObjectReceiveStream,
@@ -93,7 +112,11 @@ async def _main_loop(
     # ── Crash recovery ────────────────────────────────────────────────────────
     resume_epic = load_epic(ctx)
     if resume_epic:
-        if breakdown_state(resume_epic["id"], ctx) != "complete":
+        if resume_epic["id"] in _user_review_epic_ids(ctx):
+            log(f"Epic {resume_epic['id']} is under user review — skipping breakdown; "
+                f"leaving it for you to close.")
+            clear_epic(ctx)
+        elif breakdown_state(resume_epic["id"], ctx) != "complete":
             log(f"Resuming epic breakdown for {resume_epic['id']}...")
             await run_epic_breakdown(resume_epic, ctx)
         else:
@@ -123,37 +146,73 @@ async def _main_loop(
                 await parikshaka_send.send((merged["id"], merged.get("title", "")))
 
     # ── Main loop ─────────────────────────────────────────────────────────────
+    # Epics already announced this run, so we report each only once instead of
+    # on every idle iteration.
+    signoff_reported: set[str] = set()
+    user_review_reported: set[str] = set()
+
     while True:
-        # 0a. Epics awaiting author sign-off — pause and prompt the user
+        # 0. Close epics whose breakdown finished and whose every child task is
+        # now closed. The epic stays open through breakdown + the child task
+        # loop; once the last child merges, nothing else closes it, so we do it
+        # here. Forced close because the epic's own (discovered-from) dependents
+        # are already closed, making bd's open-dependency guard moot.
+        for epic in tasks_with_label("breakdown:complete", ctx):
+            if epic.get("issue_type") != "epic":
+                continue
+            if epic_ready_to_close(epic["id"], ctx):
+                log(f"Epic {epic['id']} ('{epic['title']}') — all child tasks complete; closing.")
+                close_task(epic["id"], "All child tasks complete", ctx, force=True)
+
+        # 0a. Epics the user is reviewing personally — skip them entirely.
+        # They'll be closed (or approved) by the user independently, so Silpi
+        # must never break them down. We only identify them here; the actual
+        # skip is enforced by excluding their IDs from the breakdown set below.
+        user_review_ids = _user_review_epic_ids(ctx)
+        new_user_review = user_review_ids - user_review_reported
+        if new_user_review:
+            for t in tasks_with_label(_USER_REVIEW_LABEL, ctx):
+                if t["id"] in new_user_review:
+                    log(f"Epic {t['id']} ('{t['title']}') is under user review — "
+                        f"skipping; you'll close it independently.")
+            user_review_reported |= new_user_review
+
+        # 0b. Epics awaiting author sign-off — report once, then keep working.
+        # These no longer halt the orchestrator; other ready tasks proceed while
+        # the epics wait for your decision.
         pending_epics = [
             t for t in tasks_with_label("review:viharapala-approved", ctx)
             if t.get("issue_type") == "epic"
         ]
-        if pending_epics:
+        new_pending = [t for t in pending_epics if t["id"] not in signoff_reported]
+        if new_pending:
             log("━" * 40)
-            log(f"AUTHOR REVIEW REQUIRED — {len(pending_epics)} epic(s) awaiting your sign-off.")
+            log(f"AUTHOR REVIEW REQUIRED — {len(new_pending)} epic(s) awaiting your sign-off.")
             log("━" * 40)
-            for t in pending_epics:
+            for t in new_pending:
                 print(f"  Epic {t['id']}: {t['title']}")
             log("")
             log("For each epic:")
             log("  Review:   bd show <id>  &&  bd comments <id>")
             log("  Approve:  bd set-state <id> review=approved --reason 'Design approved' --json")
             log("  Reject:   bd set-state <id> review=changes-required --reason '<why>' --json")
-            log(f"\nRe-run: python run.py --repo {ctx.repo_root}")
-            sys.exit(0)
+            log("  Take it:  bd set-state <id> review=user-review --reason 'I'll close this myself' --json")
+            log("Continuing with other ready work in the meantime.")
+            signoff_reported |= {t["id"] for t in new_pending}
 
-        # 0b. Break down author-approved epics
+        # 0c. Break down author-approved epics — but never those under user review.
         approved_epics = [
             t for t in tasks_with_label("review:approved", ctx)
-            if t.get("issue_type") == "epic" and breakdown_state(t["id"], ctx) != "complete"
+            if t.get("issue_type") == "epic"
+            and t["id"] not in user_review_ids
+            and breakdown_state(t["id"], ctx) != "complete"
         ]
         if approved_epics:
             for epic in approved_epics:
                 await run_epic_breakdown(epic, ctx)
             continue
 
-        # 0c. Merge tasks that Viharapala already approved (not yet closed)
+        # 0d. Merge tasks that Viharapala already approved (not yet closed)
         # Filter out tasks already marked status=blocked — they were released
         # by a prior iteration (e.g. stale approval on an empty branch) and
         # are awaiting human attention; re-entering would loop forever.
@@ -168,9 +227,19 @@ async def _main_loop(
 
                 # Already merged — bd close must have failed previously. Close
                 # cleanly without re-entering the implement/review/merge loop.
+                # Force past bd's open-dependency guard: the work is on main, so
+                # the block is moot. If even a forced close fails, the task would
+                # otherwise keep the review:approved label and re-enter this path
+                # forever (a busy loop), so mark it blocked for human attention.
                 if task_merged_to_main(task_id, ctx):
                     log(f"Task {task_id} already merged to main — closing.")
-                    close_task(task_id, "Already merged to main", ctx)
+                    if not close_task(task_id, "Already merged to main", ctx, force=True):
+                        set_state(
+                            task_id,
+                            "status=blocked",
+                            "Merged to main but bd close failed — needs human attention",
+                            ctx,
+                        )
                     continue
 
                 # Approved but the branch has no commits ahead of main and the

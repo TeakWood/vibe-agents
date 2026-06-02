@@ -63,6 +63,51 @@ def tasks_with_label(label: str, ctx: Context) -> list[dict]:
         return []
 
 
+# Dependent issue_types that are bd bookkeeping, not real child work. Every
+# `set-state` on an epic creates a closed `event` bead linked parent-child; the
+# rest are bd infrastructure. None of these should count toward epic closure.
+_NON_CHILD_TYPES = {"event", "agent", "rig", "role", "message", "gate", "template"}
+
+
+def epic_children(epic_id: str, ctx: Context) -> list[dict]:
+    """Return an epic's child tasks (id, status, issue_type, dependency_type each).
+
+    Silpi links breakdown tasks to their epic with a `discovered-from`
+    dependency, so the epic's `dependents` of that type are its children. Native
+    `parent-child` links are included too (manual children), but bd's own
+    bookkeeping beads — notably the `event` records every `set-state` creates —
+    are filtered out. bd's `epic_total_children` / `epic_closeable` fields are
+    NOT used: they count only `parent-child` links and ignore the
+    `discovered-from` edges Silpi actually creates.
+    """
+    try:
+        result = subprocess.run(
+            ["bd", "show", epic_id, "--json"],
+            check=False, text=True, capture_output=True, cwd=ctx.repo_root,
+        )
+        data = json.loads(result.stdout or "[]")
+    except (json.JSONDecodeError, FileNotFoundError):
+        return []
+    epic = data[0] if isinstance(data, list) and data else (data if isinstance(data, dict) else None)
+    if not epic:
+        return []
+    return [
+        d for d in (epic.get("dependents") or [])
+        if d.get("dependency_type") in ("discovered-from", "parent-child")
+        and d.get("issue_type") not in _NON_CHILD_TYPES
+    ]
+
+
+def epic_ready_to_close(epic_id: str, ctx: Context) -> bool:
+    """True when an epic has children and every one of them is closed.
+
+    Guards against closing an epic that was never broken down (no children) —
+    such an epic is left untouched.
+    """
+    children = epic_children(epic_id, ctx)
+    return bool(children) and all(c.get("status") == "closed" for c in children)
+
+
 def active_parent_ids(ctx: Context) -> set[str]:
     """Return parent IDs of all currently in-progress tasks.
 
@@ -105,8 +150,21 @@ def set_state(task_id: str, state_expr: str, reason: str, ctx: Context) -> None:
     )
 
 
-def close_task(task_id: str, reason: str, ctx: Context) -> None:
-    try:
-        run_cmd(["bd", "close", task_id, "--reason", reason, "--json"], ctx.repo_root)
-    except Exception:
-        log(f"Warning: could not close task {task_id} (may already be closed).")
+def close_task(task_id: str, reason: str, ctx: Context, force: bool = False) -> bool:
+    """Close a task. Returns True on success, False if bd refused.
+
+    Pass force=True to override bd's open-dependency guard — appropriate when
+    the work is already merged to main, where the dependency block is moot.
+    The real stderr is surfaced on failure rather than a generic guess.
+    """
+    cmd = ["bd", "close", task_id, "--reason", reason, "--json"]
+    if force:
+        cmd.append("--force")
+    result = subprocess.run(
+        cmd, check=False, text=True, capture_output=True, cwd=ctx.repo_root,
+    )
+    if result.returncode == 0:
+        return True
+    detail = (result.stderr or result.stdout).strip()
+    log(f"Warning: could not close task {task_id}: {detail or 'unknown error'}")
+    return False
